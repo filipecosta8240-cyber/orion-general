@@ -1,11 +1,7 @@
 {
   "$schema": "https://railway.app/railway.schema.json",
-  "build": {
-    "numPreviousVersions": 1
-  },
   "deploy": {
     "startCommand": "python orion_cloud_server.py",
-    "healthcheckPath": "/api/health",
-    "healthcheckTimeout": 300
+    "healthcheckPath": "/api/health"
   }
 }
