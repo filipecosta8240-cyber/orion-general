@@ -22,7 +22,7 @@ import threading
 # Configuração
 PORT = int(os.environ.get('PORT', 8080))
 PROJECT_ROOT = Path(__file__).resolve().parent
-WEB_DIR = PROJECT_ROOT / "ORION_SYSTEM" / "web_ui"
+WEB_DIR = PROJECT_ROOT  # Na raiz agora
 
 
 class ORIONCloudHandler(BaseHTTPRequestHandler):
