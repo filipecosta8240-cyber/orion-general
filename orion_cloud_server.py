@@ -14,8 +14,8 @@ from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 PORT = int(os.environ.get('PORT', 8080))
 PROJECT_ROOT = Path(__file__).resolve().parent
 
-# Token GitHub (para sync)
-GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "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")
+# Token GitHub (via variável de ambiente no Railway)
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 
 # HTML embutido
 HTML_PAGE = """<!DOCTYPE html>
