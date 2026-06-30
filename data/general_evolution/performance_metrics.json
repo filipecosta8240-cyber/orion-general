@@ -1,0 +1,10 @@
+{
+  "test": {
+    "metric_name": "test",
+    "value": 0.85,
+    "trend": "stable",
+    "history": [
+      0.85
+    ]
+  }
+}

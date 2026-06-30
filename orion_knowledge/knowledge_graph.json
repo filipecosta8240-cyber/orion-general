@@ -1,0 +1,104 @@
+{
+  "entities": [
+    {
+      "id": "b80f8791-519",
+      "name": "Python",
+      "entity_type": "technology",
+      "description": "Programming language",
+      "properties": {},
+      "created_at": 1782834731.9081826,
+      "updated_at": 1782835288.0127895,
+      "confidence": 1.0,
+      "agent_id": "system"
+    },
+    {
+      "id": "9c9595d4-b90",
+      "name": "Django",
+      "entity_type": "technology",
+      "description": "",
+      "properties": {},
+      "created_at": 1782834731.9383924,
+      "updated_at": 1782835288.017226,
+      "confidence": 1.0,
+      "agent_id": "system"
+    },
+    {
+      "id": "a8e7ef05-66d",
+      "name": "A",
+      "entity_type": "concept",
+      "description": "",
+      "properties": {},
+      "created_at": 1782834731.9669135,
+      "updated_at": 1782835288.0421543,
+      "confidence": 1.0,
+      "agent_id": "system"
+    },
+    {
+      "id": "29fcb9a9-832",
+      "name": "B",
+      "entity_type": "concept",
+      "description": "",
+      "properties": {},
+      "created_at": 1782834731.9727097,
+      "updated_at": 1782835288.0465999,
+      "confidence": 1.0,
+      "agent_id": "system"
+    },
+    {
+      "id": "2583d685-8b6",
+      "name": "Machine Learning",
+      "entity_type": "technology",
+      "description": "",
+      "properties": {},
+      "created_at": 1782834732.000173,
+      "updated_at": 1782835288.070238,
+      "confidence": 1.0,
+      "agent_id": "system"
+    },
+    {
+      "id": "09c26823-626",
+      "name": "Deep Learning",
+      "entity_type": "technology",
+      "description": "",
+      "properties": {},
+      "created_at": 1782834732.0041242,
+      "updated_at": 1782835288.074537,
+      "confidence": 1.0,
+      "agent_id": "system"
+    },
+    {
+      "id": "d6b78a04-97f",
+      "name": "Test",
+      "entity_type": "concept",
+      "description": "",
+      "properties": {},
+      "created_at": 1782834732.0230033,
+      "updated_at": 1782835288.0937974,
+      "confidence": 1.0,
+      "agent_id": "system"
+    }
+  ],
+  "relations": [
+    {
+      "id": "87db9d3e-dad",
+      "source_id": "b80f8791-519",
+      "target_id": "9c9595d4-b90",
+      "relation_type": "uses",
+      "weight": 1.0,
+      "properties": {},
+      "created_at": 1782834731.9443269,
+      "agent_id": "system"
+    },
+    {
+      "id": "cc01c3ac-4d0",
+      "source_id": "a8e7ef05-66d",
+      "target_id": "29fcb9a9-832",
+      "relation_type": "related_to",
+      "weight": 1.0,
+      "properties": {},
+      "created_at": 1782834731.977266,
+      "agent_id": "system"
+    }
+  ],
+  "last_saved": 1782835288.093815
+}

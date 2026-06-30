@@ -1,0 +1,13 @@
+[
+  {
+    "id": "b47d8ddcb5f1",
+    "query": "teste",
+    "response": "resposta",
+    "mode_used": "test",
+    "confidence": 0.8,
+    "feedback": null,
+    "tags": [],
+    "timestamp": "2026-06-30T17:50:41.165096+00:00",
+    "context": null
+  }
+]

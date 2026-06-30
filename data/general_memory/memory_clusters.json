@@ -1,0 +1,287 @@
+[
+  {
+    "cluster_id": "0a232b772634",
+    "name": "test",
+    "description": "Memórias da categoria: test",
+    "memory_ids": [
+      "aa265a83c098"
+    ],
+    "created_at": "2026-06-30T17:50:41.612547+00:00",
+    "last_updated": "2026-06-30T17:50:41.612552+00:00"
+  },
+  {
+    "cluster_id": "8ede7dd4f0dd",
+    "name": "definicao",
+    "description": "Memórias da categoria: definicao",
+    "memory_ids": [
+      "0b4ceaaa40e7"
+    ],
+    "created_at": "2026-06-30T18:12:59.777878+00:00",
+    "last_updated": "2026-06-30T18:12:59.777880+00:00"
+  },
+  {
+    "cluster_id": "678130764cb1",
+    "name": "modelos_negocio",
+    "description": "Memórias da categoria: modelos_negocio",
+    "memory_ids": [
+      "618a6b29e3c6"
+    ],
+    "created_at": "2026-06-30T18:12:59.789911+00:00",
+    "last_updated": "2026-06-30T18:12:59.789933+00:00"
+  },
+  {
+    "cluster_id": "95b6494ae0a7",
+    "name": "tecnologias",
+    "description": "Memórias da categoria: tecnologias",
+    "memory_ids": [
+      "f9913afe7094"
+    ],
+    "created_at": "2026-06-30T18:12:59.802239+00:00",
+    "last_updated": "2026-06-30T18:12:59.802241+00:00"
+  },
+  {
+    "cluster_id": "cf41ddfa3872",
+    "name": "legislacao",
+    "description": "Memórias da categoria: legislacao",
+    "memory_ids": [
+      "f0b8ec4acc4a"
+    ],
+    "created_at": "2026-06-30T18:12:59.814133+00:00",
+    "last_updated": "2026-06-30T18:12:59.814135+00:00"
+  },
+  {
+    "cluster_id": "8c70e419f53c",
+    "name": "certificacoes",
+    "description": "Memórias da categoria: certificacoes",
+    "memory_ids": [
+      "2b1e5490c8b9"
+    ],
+    "created_at": "2026-06-30T18:12:59.825654+00:00",
+    "last_updated": "2026-06-30T18:12:59.825656+00:00"
+  },
+  {
+    "cluster_id": "d9a006636898",
+    "name": "canais_venda",
+    "description": "Memórias da categoria: canais_venda",
+    "memory_ids": [
+      "205f80902bed"
+    ],
+    "created_at": "2026-06-30T18:12:59.837444+00:00",
+    "last_updated": "2026-06-30T18:12:59.837447+00:00"
+  },
+  {
+    "cluster_id": "13f26a0d1032",
+    "name": "exemplos",
+    "description": "Memórias da categoria: exemplos",
+    "memory_ids": [
+      "4980ad7d084d"
+    ],
+    "created_at": "2026-06-30T18:12:59.849171+00:00",
+    "last_updated": "2026-06-30T18:12:59.849173+00:00"
+  },
+  {
+    "cluster_id": "ed3a8853ec14",
+    "name": "tendencias",
+    "description": "Memórias da categoria: tendencias",
+    "memory_ids": [
+      "9602249f3a45"
+    ],
+    "created_at": "2026-06-30T18:12:59.861156+00:00",
+    "last_updated": "2026-06-30T18:12:59.861178+00:00"
+  },
+  {
+    "cluster_id": "5254b34e9d91",
+    "name": "investimento",
+    "description": "Memórias da categoria: investimento",
+    "memory_ids": [
+      "2b1cb27cc341"
+    ],
+    "created_at": "2026-06-30T18:12:59.873150+00:00",
+    "last_updated": "2026-06-30T18:12:59.873152+00:00"
+  },
+  {
+    "cluster_id": "4331157ccfaf",
+    "name": "plantel_estrutura",
+    "description": "Memórias da categoria: plantel_estrutura",
+    "memory_ids": [
+      "38ad8b48a873",
+      "a9b08fe94088",
+      "67e75dee70c7"
+    ],
+    "created_at": "2026-06-30T18:17:42.869038+00:00",
+    "last_updated": "2026-06-30T19:00:13.964672+00:00"
+  },
+  {
+    "cluster_id": "e9aed4e68f9b",
+    "name": "incubacao",
+    "description": "Memórias da categoria: incubacao",
+    "memory_ids": [
+      "9e2fe343f87d",
+      "cf9ef1205bf7"
+    ],
+    "created_at": "2026-06-30T18:17:42.885125+00:00",
+    "last_updated": "2026-06-30T19:00:14.115785+00:00"
+  },
+  {
+    "cluster_id": "e10a80612e8f",
+    "name": "problema",
+    "description": "Memórias da categoria: problema",
+    "memory_ids": [
+      "fe61ab0bb5f4",
+      "ca13e14f740e"
+    ],
+    "created_at": "2026-06-30T18:17:42.901486+00:00",
+    "last_updated": "2026-06-30T18:17:42.916461+00:00"
+  },
+  {
+    "cluster_id": "1282cb5d9e7b",
+    "name": "observacao",
+    "description": "Memórias da categoria: observacao",
+    "memory_ids": [
+      "44502cc33f58"
+    ],
+    "created_at": "2026-06-30T18:17:42.931805+00:00",
+    "last_updated": "2026-06-30T18:17:42.931807+00:00"
+  },
+  {
+    "cluster_id": "3cfb1cabe651",
+    "name": "acao_imediata",
+    "description": "Memórias da categoria: acao_imediata",
+    "memory_ids": [
+      "22b6a6c6ad4a"
+    ],
+    "created_at": "2026-06-30T18:17:42.946646+00:00",
+    "last_updated": "2026-06-30T18:17:42.946648+00:00"
+  },
+  {
+    "cluster_id": "a3804df31db7",
+    "name": "plantel_detalhe",
+    "description": "Memórias da categoria: plantel_detalhe",
+    "memory_ids": [
+      "9f84179f2801"
+    ],
+    "created_at": "2026-06-30T19:00:13.981669+00:00",
+    "last_updated": "2026-06-30T19:00:13.981672+00:00"
+  },
+  {
+    "cluster_id": "60e470f44607",
+    "name": "producao_ovos",
+    "description": "Memórias da categoria: producao_ovos",
+    "memory_ids": [
+      "83d37bc760c3"
+    ],
+    "created_at": "2026-06-30T19:00:13.998692+00:00",
+    "last_updated": "2026-06-30T19:00:13.998694+00:00"
+  },
+  {
+    "cluster_id": "e03caf7934cd",
+    "name": "producao_media",
+    "description": "Memórias da categoria: producao_media",
+    "memory_ids": [
+      "2d8acdb42dc5"
+    ],
+    "created_at": "2026-06-30T19:00:14.014553+00:00",
+    "last_updated": "2026-06-30T19:00:14.014556+00:00"
+  },
+  {
+    "cluster_id": "a37790cb5e57",
+    "name": "preco_venda",
+    "description": "Memórias da categoria: preco_venda",
+    "memory_ids": [
+      "503214906645"
+    ],
+    "created_at": "2026-06-30T19:00:14.029987+00:00",
+    "last_updated": "2026-06-30T19:00:14.029989+00:00"
+  },
+  {
+    "cluster_id": "61b3179bc2f1",
+    "name": "receita",
+    "description": "Memórias da categoria: receita",
+    "memory_ids": [
+      "a1c98e2a5a00"
+    ],
+    "created_at": "2026-06-30T19:00:14.043882+00:00",
+    "last_updated": "2026-06-30T19:00:14.043884+00:00"
+  },
+  {
+    "cluster_id": "f50f3e5c0f69",
+    "name": "custos",
+    "description": "Memórias da categoria: custos",
+    "memory_ids": [
+      "44d389ef5b6b"
+    ],
+    "created_at": "2026-06-30T19:00:14.058734+00:00",
+    "last_updated": "2026-06-30T19:00:14.058736+00:00"
+  },
+  {
+    "cluster_id": "f60c77f652f9",
+    "name": "analise_financeira",
+    "description": "Memórias da categoria: analise_financeira",
+    "memory_ids": [
+      "53bd3971bde8"
+    ],
+    "created_at": "2026-06-30T19:00:14.073018+00:00",
+    "last_updated": "2026-06-30T19:00:14.073020+00:00"
+  },
+  {
+    "cluster_id": "bad0ab0fccc0",
+    "name": "contexto_utilizador",
+    "description": "Memórias da categoria: contexto_utilizador",
+    "memory_ids": [
+      "334585bf2412"
+    ],
+    "created_at": "2026-06-30T19:00:14.087580+00:00",
+    "last_updated": "2026-06-30T19:00:14.087582+00:00"
+  },
+  {
+    "cluster_id": "69e2f6ba4f1f",
+    "name": "objetivo",
+    "description": "Memórias da categoria: objetivo",
+    "memory_ids": [
+      "1ed4af8879ff"
+    ],
+    "created_at": "2026-06-30T19:00:14.101775+00:00",
+    "last_updated": "2026-06-30T19:00:14.101778+00:00"
+  },
+  {
+    "cluster_id": "4ac7b682dc0d",
+    "name": "oportunidade",
+    "description": "Memórias da categoria: oportunidade",
+    "memory_ids": [
+      "521da4f4a940"
+    ],
+    "created_at": "2026-06-30T19:00:14.129929+00:00",
+    "last_updated": "2026-06-30T19:00:14.129931+00:00"
+  },
+  {
+    "cluster_id": "9f25bc091aad",
+    "name": "padrao_postura",
+    "description": "Memórias da categoria: padrao_postura",
+    "memory_ids": [
+      "26ecb0e233a2"
+    ],
+    "created_at": "2026-06-30T19:03:28.944410+00:00",
+    "last_updated": "2026-06-30T19:03:28.944413+00:00"
+  },
+  {
+    "cluster_id": "f40ef1fe3640",
+    "name": "receita_araucana",
+    "description": "Memórias da categoria: receita_araucana",
+    "memory_ids": [
+      "69a1b0c590de"
+    ],
+    "created_at": "2026-06-30T19:03:28.959013+00:00",
+    "last_updated": "2026-06-30T19:03:28.959015+00:00"
+  },
+  {
+    "cluster_id": "c1428cf41ca7",
+    "name": "regra_utilizador",
+    "description": "Memórias da categoria: regra_utilizador",
+    "memory_ids": [
+      "0fb75c7b39b8",
+      "b207591f4c7c"
+    ],
+    "created_at": "2026-06-30T19:03:29.007618+00:00",
+    "last_updated": "2026-06-30T19:03:58.176834+00:00"
+  }
+]

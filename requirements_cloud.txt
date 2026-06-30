@@ -1,0 +1,17 @@
+# ORION General Agent - Dependencies
+# Cloud deployment (Railway, Render, etc.)
+
+# Core
+aiohttp>=3.9.0
+orjson>=3.9.0
+
+# Web
+uvicorn[standard]>=0.27.0
+fastapi>=0.109.0
+
+# Data
+pydantic>=2.5.0
+
+# Utilities
+python-multipart>=0.0.6
+httpx>=0.26.0

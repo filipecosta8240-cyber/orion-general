@@ -1,0 +1,31 @@
+[
+  {
+    "id": "291affaa-f33",
+    "name": "Test Health Check",
+    "description": "",
+    "task_type": "",
+    "handler": "health_check",
+    "payload": {
+      "test": true
+    },
+    "status": "completed",
+    "priority": 1,
+    "agent_id": "system",
+    "run_at": null,
+    "recurrence": "none",
+    "recurrence_interval_minutes": 60,
+    "recurrence_count": 0,
+    "max_recurrences": -1,
+    "depends_on": [],
+    "retry_count": 0,
+    "max_retries": 3,
+    "retry_delay_seconds": 60,
+    "created_at": 1782835263.8111942,
+    "started_at": 1782835263.815921,
+    "completed_at": 1782835263.8159246,
+    "last_run_at": null,
+    "next_run_at": null,
+    "result": "{'status': 'healthy', 'timestamp': 1782835263.815924}",
+    "error": null
+  }
+]

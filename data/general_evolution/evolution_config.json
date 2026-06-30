@@ -1,0 +1,6 @@
+{
+  "auto_evolve": true,
+  "evolution_threshold": 0.1,
+  "max_evolutions_per_day": 5,
+  "require_approval": true
+}

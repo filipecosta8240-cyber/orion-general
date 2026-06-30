@@ -1,0 +1,195 @@
+# ORION System - Kubernetes Deployment
+# Production-ready Kubernetes manifests
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: orion-system
+  labels:
+    app.kubernetes.io/name: orion
+    app.kubernetes.io/part-of: orion-system
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orion-api
+  namespace: orion-system
+  labels:
+    app: orion-api
+    component: api
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: orion-api
+  template:
+    metadata:
+      labels:
+        app: orion-api
+        component: api
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+      - name: orion-api
+        image: orion-system:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8000
+          name: http
+          protocol: TCP
+        - containerPort: 8001
+          name: mcp
+          protocol: TCP
+        env:
+        - name: ORION_ENV
+          value: "production"
+        - name: ORION_LOG_LEVEL
+          value: "INFO"
+        - name: REDIS_URL
+          value: "redis://redis-service:6379/0"
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: orion-secrets
+              key: database-url
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        volumeMounts:
+        - name: orion-data
+          mountPath: /app/data
+        - name: orion-logs
+          mountPath: /app/logs
+      volumes:
+      - name: orion-data
+        persistentVolumeClaim:
+          claimName: orion-data-pvc
+      - name: orion-logs
+        emptyDir: {}
+      imagePullSecrets:
+      - name: orion-registry-secret
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: orion-api-service
+  namespace: orion-system
+  labels:
+    app: orion-api
+spec:
+  selector:
+    app: orion-api
+  ports:
+  - port: 8000
+    targetPort: 8000
+    name: http
+  - port: 8001
+    targetPort: 8001
+    name: mcp
+  type: ClusterIP
+
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: orion-ingress
+  namespace: orion-system
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/use-regex: "true"
+spec:
+  ingressClassName: nginx
+  tls:
+  - hosts:
+    - orion.yourdomain.com
+    secretName: orion-tls-secret
+  rules:
+  - host: orion.yourdomain.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: orion-api-service
+            port:
+              number: 8000
+
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: orion-hpa
+  namespace: orion-system
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: orion-api
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: orion-data-pvc
+  namespace: orion-system
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: standard
+  resources:
+    requests:
+      storage: 10Gi
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: orion-secrets
+  namespace: orion-system
+type: Opaque
+stringData:
+  database-url: "postgresql://orion:orion@postgres-service:5432/orion"
+  redis-url: "redis://redis-service:6379/0"
+  api-key: "your-api-key-here"

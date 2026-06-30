@@ -1,0 +1,96 @@
+# ORION Cloud Docker Compose
+# Full production stack for cloud deployment
+#
+# Usage:
+#   docker compose -f docker-compose.cloud.yml up -d
+#
+# Requirements:
+#   - Docker & Docker Compose
+#   - Minimum: 2 vCPU, 4GB RAM
+
+version: '3.8'
+
+services:
+  # ORION Main Service
+  orion:
+    build:
+      context: ..
+      dockerfile: cloud/Dockerfile.cloud
+    container_name: orion-system
+    restart: always
+    ports:
+      - "8000:8000"   # Main API
+      - "8001:8001"   # MCP Server (SSE)
+    volumes:
+      - orion_data:/app/data
+      - orion_logs:/app/logs
+      - orion_memory:/app/ORION_SYSTEM
+    environment:
+      - ORION_ENV=production
+      - ORION_LOG_LEVEL=INFO
+      - REDIS_URL=redis://redis:6379/0
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - orion-network
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+        reservations:
+          cpus: '1'
+          memory: 2G
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: orion-redis
+    restart: always
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --maxmemory 1gb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - orion-network
+
+  # Nginx Reverse Proxy (optional, for HTTPS)
+  nginx:
+    image: nginx:alpine
+    container_name: orion-nginx
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf
+      - ./nginx/ssl:/etc/nginx/ssl
+    depends_on:
+      - orion
+    networks:
+      - orion-network
+    profiles:
+      - with-ssl
+
+volumes:
+  orion_data:
+  orion_logs:
+  orion_memory:
+  redis_data:
+
+networks:
+  orion-network:
+    driver: bridge

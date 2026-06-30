@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "orion": {
+      "command": "C:\\Users\\BIG_P\\AppData\\Local\\Programs\\Python\\Python314\\python.exe",
+      "args": ["C:\\Users\\BIG_P\\OneDrive\\Área de Trabalho\\Ai\\Jogo\\orion_mcp_server.py"],
+      "env": {
+        "PYTHONPATH": "C:\\Users\\BIG_P\\OneDrive\\Área de Trabalho\\Ai\\Jogo"
+      }
+    }
+  }
+}
