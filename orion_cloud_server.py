@@ -14,6 +14,9 @@ from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 PORT = int(os.environ.get('PORT', 8080))
 PROJECT_ROOT = Path(__file__).resolve().parent
 
+# Token GitHub (para sync)
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "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")
+
 # HTML embutido
 HTML_PAGE = """<!DOCTYPE html>
 <html lang="pt">
@@ -159,38 +162,55 @@ class ORIONHandler(BaseHTTPRequestHandler):
                 data = json.loads(body)
                 message = data.get('message', '')
                 
-                # Guarda mensagem do utilizador
-                self.save_to_sync("user", message, "cloud")
+                # Guarda no GitHub
+                self.save_to_github("user", message, "cloud")
                 
                 response = self.call_general(message)
                 
-                # Guarda resposta do assistente
-                self.save_to_sync("assistant", response, "cloud")
+                # Guarda resposta no GitHub
+                self.save_to_github("assistant", response, "cloud")
                 
                 self.send_json({"response": response})
             except Exception as e:
                 self.send_json({"response": f"Erro: {str(e)}"})
         elif self.path == '/api/messages':
-            # Endpoint para obter mensagens
-            messages = self.load_from_sync()
+            messages = self.load_from_github()
             self.send_json({"messages": messages})
         else:
             self.send_error(404)
     
-    def save_to_sync(self, role, content, source):
-        """Guarda mensagem no sistema de sincronização"""
+    def save_to_github(self, role, content, source):
+        """Guarda mensagem no GitHub"""
         try:
+            import base64
             import hashlib
             from datetime import datetime, timezone
             
-            messages_file = PROJECT_ROOT / "data" / "sync_messages.json"
-            messages_file.parent.mkdir(exist_ok=True)
+            repo = "filipecosta8240-cyber/orion-general"
+            file_path = "data/conversations.json"
+            url = f"https://api.github.com/repos/{repo}/contents/{file_path}"
             
+            headers = {
+                "Authorization": f"token {GITHUB_TOKEN}",
+                "Accept": "application/vnd.github.v3+json",
+                "User-Agent": "ORION-Sync",
+            }
+            
+            # Obtém mensagens existentes
             messages = []
-            if messages_file.exists():
-                with open(messages_file, "r", encoding="utf-8") as f:
-                    messages = json.load(f)
+            sha = None
+            try:
+                req = urllib.request.Request(url, headers=headers)
+                with urllib.request.urlopen(req) as response:
+                    result = json.loads(response.read().decode())
+                    if "content" in result:
+                        content_b64 = result["content"]
+                        messages = json.loads(base64.b64decode(content_b64).decode())
+                        sha = result["sha"]
+            except:
+                pass
             
+            # Adiciona nova mensagem
             message = {
                 "id": hashlib.md5(f"{content}{datetime.now()}".encode()).hexdigest()[:12],
                 "role": role,
@@ -198,24 +218,55 @@ class ORIONHandler(BaseHTTPRequestHandler):
                 "source": source,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
-            
             messages.append(message)
             
-            if len(messages) > 100:
-                messages = messages[-100:]
+            # Limita a 200
+            if len(messages) > 200:
+                messages = messages[-200:]
             
-            with open(messages_file, "w", encoding="utf-8") as f:
-                json.dump(messages, f, ensure_ascii=False, indent=2)
-        except:
-            pass
+            # Guarda no GitHub
+            new_content = json.dumps(messages, ensure_ascii=False, indent=2)
+            content_b64 = base64.b64encode(new_content.encode()).decode()
+            
+            data = {
+                "message": f"ORION Sync: {datetime.now(timezone.utc).strftime('%H:%M:%S')}",
+                "content": content_b64,
+                "branch": "master",
+            }
+            if sha:
+                data["sha"] = sha
+            
+            req = urllib.request.Request(
+                url,
+                data=json.dumps(data).encode(),
+                headers=headers,
+                method="PUT"
+            )
+            urllib.request.urlopen(req)
+        except Exception as e:
+            print(f"Sync error: {e}")
     
-    def load_from_sync(self):
-        """Carrega mensagens do sistema de sincronização"""
+    def load_from_github(self):
+        """Carrega mensagens do GitHub"""
         try:
-            messages_file = PROJECT_ROOT / "data" / "sync_messages.json"
-            if messages_file.exists():
-                with open(messages_file, "r", encoding="utf-8") as f:
-                    return json.load(f)
+            import base64
+            
+            repo = "filipecosta8240-cyber/orion-general"
+            file_path = "data/conversations.json"
+            url = f"https://api.github.com/repos/{repo}/contents/{file_path}"
+            
+            headers = {
+                "Authorization": f"token {GITHUB_TOKEN}",
+                "Accept": "application/vnd.github.v3+json",
+                "User-Agent": "ORION-Sync",
+            }
+            
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req) as response:
+                result = json.loads(response.read().decode())
+                if "content" in result:
+                    content_b64 = result["content"]
+                    return json.loads(base64.b64decode(content_b64).decode())
         except:
             pass
         return []
