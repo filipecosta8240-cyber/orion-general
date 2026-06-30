@@ -69,10 +69,16 @@ class ORIONCloudHandler(BaseHTTPRequestHandler):
             script = f"""
 import sys
 sys.path.insert(0, r"{PROJECT_ROOT}")
-from orion.agents import get_general
-general = get_general()
-result = general.think("{message.replace('"', '\\"')}")
-print(result)
+
+# Tenta importar ORION
+try:
+    from orion.agents import get_general
+    general = get_general()
+    result = general.think("{message.replace('"', '\\"')}")
+    print(result)
+except ImportError:
+    # Fallback se ORION não estiver disponível
+    print("ORION não disponível no cloud. Mensagem recebida: {message}")
 """
             result = subprocess.run(
                 [python_path, "-c", script],
