@@ -158,12 +158,67 @@ class ORIONHandler(BaseHTTPRequestHandler):
             try:
                 data = json.loads(body)
                 message = data.get('message', '')
+                
+                # Guarda mensagem do utilizador
+                self.save_to_sync("user", message, "cloud")
+                
                 response = self.call_general(message)
+                
+                # Guarda resposta do assistente
+                self.save_to_sync("assistant", response, "cloud")
+                
                 self.send_json({"response": response})
             except Exception as e:
                 self.send_json({"response": f"Erro: {str(e)}"})
+        elif self.path == '/api/messages':
+            # Endpoint para obter mensagens
+            messages = self.load_from_sync()
+            self.send_json({"messages": messages})
         else:
             self.send_error(404)
+    
+    def save_to_sync(self, role, content, source):
+        """Guarda mensagem no sistema de sincronização"""
+        try:
+            import hashlib
+            from datetime import datetime, timezone
+            
+            messages_file = PROJECT_ROOT / "data" / "sync_messages.json"
+            messages_file.parent.mkdir(exist_ok=True)
+            
+            messages = []
+            if messages_file.exists():
+                with open(messages_file, "r", encoding="utf-8") as f:
+                    messages = json.load(f)
+            
+            message = {
+                "id": hashlib.md5(f"{content}{datetime.now()}".encode()).hexdigest()[:12],
+                "role": role,
+                "content": content,
+                "source": source,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+            
+            messages.append(message)
+            
+            if len(messages) > 100:
+                messages = messages[-100:]
+            
+            with open(messages_file, "w", encoding="utf-8") as f:
+                json.dump(messages, f, ensure_ascii=False, indent=2)
+        except:
+            pass
+    
+    def load_from_sync(self):
+        """Carrega mensagens do sistema de sincronização"""
+        try:
+            messages_file = PROJECT_ROOT / "data" / "sync_messages.json"
+            if messages_file.exists():
+                with open(messages_file, "r", encoding="utf-8") as f:
+                    return json.load(f)
+        except:
+            pass
+        return []
 
     def call_general(self, message):
         try:
