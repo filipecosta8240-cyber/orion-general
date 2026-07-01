@@ -337,7 +337,29 @@ class ORIONHandler(BaseHTTPRequestHandler):
                 pass
             return self._poultry_response(message, msg, ctx)
 
+        ai = self._ai_chat(message)
+        if ai:
+            return ai
+
         return self._web_search(message)
+
+    def _ai_chat(self, message):
+        try:
+            prompt = (
+                "Tu és o ORION, um assistente IA inteligente e amigável. "
+                "Responde em português de Portugal. "
+                "Contexto: O utilizador tem uma microquinta avicola em Portugal com "
+                "3 baias de galinhas (RIR, JG, Araucana), 10 ovos/dia, 2.50EUR/dozinha. "
+                "Se a pergunta for sobre a microquinta, usa o contexto. "
+                "Se for sobre outro assunto, responde normalmente de forma completa.\n\n"
+                f"Pergunta: {message}"
+            )
+            url = "https://text.pollinations.ai/" + urllib.parse.quote(prompt)
+            req = urllib.request.Request(url, headers={"User-Agent": "ORION/5.0"})
+            with urllib.request.urlopen(req, timeout=30, context=SSL_CTX) as resp:
+                return resp.read().decode("utf-8").strip()
+        except Exception:
+            return None
 
     def _web_search(self, message):
         try:
@@ -345,15 +367,12 @@ class ORIONHandler(BaseHTTPRequestHandler):
             req = urllib.request.Request(url, headers={"User-Agent": "ORION/5.0"})
             with urllib.request.urlopen(req, timeout=8, context=SSL_CTX) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
-
             title = data.get("title", message)
             extract = data.get("extract", "")
             if extract:
                 return f"**{title}**\n\n{extract}"
-
         except Exception:
             pass
-
         try:
             url2 = "https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=" + urllib.parse.quote(message) + "&format=json&srlimit=3"
             req2 = urllib.request.Request(url2, headers={"User-Agent": "ORION/5.0"})
@@ -369,7 +388,6 @@ class ORIONHandler(BaseHTTPRequestHandler):
                 return f"Resultados: {message}\n\n" + "\n\n".join(lines)
         except Exception:
             pass
-
         return (f"Nao encontrei sobre: {message}\n\n"
                 "Tenta reformular ou pergunta sobre a microquinta.")
 
