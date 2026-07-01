@@ -59,6 +59,12 @@ try:
     from orion.memory import ObsidianMemoryBridge
     from orion.autonomous_learning import AutonomousLearner, get_learner
     from orion.self_evolution_engine import SelfEvolutionEngine, get_evolution_engine
+    from orion.rag_system import RAGSystem
+    from orion.knowledge_graph import KnowledgeGraph, KnowledgeGraphQueryEngine
+    from orion.episodic_memory import EpisodicMemory
+    from orion.self_healing import SelfHealingEngine
+    from orion.goal_planner import GoalPlanner
+    from orion.prospective_memory import ProspectiveMemory
     ORION_IMPORTED = True
 except ImportError as e:
     ORION_IMPORTED = False
@@ -80,6 +86,15 @@ class OrionBrain:
         self.conversation_history: List[Dict] = []
         self.max_history = 50
 
+        # === NOVOS COMPONENTES ===
+        self.rag: Optional[RAGSystem] = None
+        self.kg: Optional[KnowledgeGraph] = None
+        self.kg_query: Optional[KnowledgeGraphQueryEngine] = None
+        self.episodic: Optional[EpisodicMemory] = None
+        self.self_healing: Optional[SelfHealingEngine] = None
+        self.goal_planner: Optional[GoalPlanner] = None
+        self.prospective: Optional[ProspectiveMemory] = None
+
         if ORION_IMPORTED:
             try:
                 self.memory = ObsidianMemoryBridge()
@@ -88,9 +103,85 @@ class OrionBrain:
                 self.ltm = get_long_term_memory()
                 self.learner = get_learner()
                 self.evolution_engine = get_evolution_engine()
+
+                # Inicializa novos componentes com try/except para robustez
+                try:
+                    self.rag = RAGSystem()
+                except Exception as e:
+                    print(f"[ORION] RAGSystem init: {e}")
+                try:
+                    self.kg = KnowledgeGraph(self.memory)
+                    self.kg_query = KnowledgeGraphQueryEngine(self.kg)
+                except Exception as e:
+                    print(f"[ORION] KnowledgeGraph init: {e}")
+                try:
+                    self.episodic = EpisodicMemory()
+                except Exception as e:
+                    print(f"[ORION] EpisodicMemory init: {e}")
+                try:
+                    self.self_healing = SelfHealingEngine()
+                    self._register_components_self_healing()
+                except Exception as e:
+                    print(f"[ORION] SelfHealingEngine init: {e}")
+                try:
+                    self.goal_planner = GoalPlanner(self.memory)
+                except Exception as e:
+                    print(f"[ORION] GoalPlanner init: {e}")
+                try:
+                    self.prospective = ProspectiveMemory()
+                    self._schedule_prospective_intentions()
+                except Exception as e:
+                    print(f"[ORION] ProspectiveMemory init: {e}")
+
                 print("[ORION] Brain inicializado com pacote orion/ completo")
             except Exception as e:
                 print(f"[ORION] Erro ao inicializar pacote orion/: {e}")
+
+    def _register_components_self_healing(self):
+        """Regista componentes no SelfHealingEngine para circuit breakers."""
+        if not self.self_healing:
+            return
+        try:
+            self.self_healing.register_component(
+                "web_scraper",
+                lambda: self.scraper is not None and hasattr(self.scraper, "search")
+            )
+            self.self_healing.register_component(
+                "long_term_memory",
+                lambda: self.ltm is not None and hasattr(self.ltm, "store")
+            )
+            self.self_healing.register_component(
+                "rag_system",
+                lambda: self.rag is not None and hasattr(self.rag, "augment_prompt")
+            )
+            self.self_healing.register_component(
+                "knowledge_graph",
+                lambda: self.kg is not None and hasattr(self.kg_query, "ask")
+            )
+            self.self_healing.register_component(
+                "episodic_memory",
+                lambda: self.episodic is not None and hasattr(self.episodic, "query")
+            )
+            print("[ORION] 5 componentes registados no SelfHealingEngine")
+        except Exception as e:
+            print(f"[ORION] Self-healing registration error: {e}")
+
+    def _schedule_prospective_intentions(self):
+        """Converte intencoes pendentes da ProspectiveMemory em tarefas do GoalPlanner."""
+        if not self.prospective or not self.goal_planner:
+            return
+        try:
+            intentions = self.prospective.get_pending()
+            for intention in intentions:
+                goal = self.goal_planner.create_goal(
+                    title=intention.description[:60],
+                    description=intention.intended_action,
+                    target_date=intention.deadline or "",
+                )
+                if goal:
+                    print(f"[ORION] Intencao '{intention.description[:30]}...' convertida em objetivo")
+        except Exception as e:
+            print(f"[ORION] Schedule prospective intentions error: {e}")
 
     def add_to_history(self, role: str, content: str):
         self.conversation_history.append({
@@ -183,12 +274,21 @@ class OrionBrain:
             _last_ai_call = time.time()
 
         if system_prompt:
-            full_prompt = f"{system_prompt}\nPergunta: {prompt}\nResposta:"
+            full_prompt = f"{system_prompt}\n\n{prompt}"
         else:
             full_prompt = prompt
         full_prompt = full_prompt[:2000]
 
-        # 1. Pollinations AI (gratis, sem API key)
+        def cache_and_return(text):
+            if text and len(text) > 5:
+                _ai_cache[cache_key] = {"response": text, "time": time.time()}
+                if len(_ai_cache) > _ai_cache_max:
+                    oldest = min(_ai_cache.keys(), key=lambda k: _ai_cache[k]["time"])
+                    _ai_cache.pop(oldest, None)
+                return text
+            return None
+
+        # === Backend 1: Pollinations AI (gratis, sem API key) ===
         for attempt in range(2):
             try:
                 prompt_encoded = urllib.parse.quote(full_prompt.encode("utf-8"))
@@ -197,39 +297,83 @@ class OrionBrain:
                 with urllib.request.urlopen(req, timeout=20, context=SSL_CTX) as resp:
                     text = resp.read().decode("utf-8").strip()
                     if text and len(text) > 5 and "429" not in text:
-                        # Cache it
-                        _ai_cache[cache_key] = {"response": text, "time": time.time()}
-                        if len(_ai_cache) > _ai_cache_max:
-                            oldest = min(_ai_cache.keys(), key=lambda k: _ai_cache[k]["time"])
-                            _ai_cache.pop(oldest, None)
-                        return text
+                        return cache_and_return(text)
             except Exception as e:
                 print(f"[ORION] Pollinations attempt {attempt+1}: {e}")
                 time.sleep(3)
 
-        # 2. Fallback: HuggingFace Mistral 7B (gratis, sem API key)
+        # === Backend 2: Gemini via web (gratis, sem API key) ===
+        try:
+            gemini_payload = json.dumps({
+                "contents": [{"parts": [{"text": full_prompt[:1500]}]}],
+                "generationConfig": {"maxOutputTokens": 500, "temperature": 0.7}
+            }).encode()
+            gemini_key = os.environ.get("GEMINI_API_KEY", "")
+            if gemini_key:
+                gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={gemini_key}"
+            else:
+                gemini_url = "https://text.pollinations.ai/" + urllib.parse.quote(f"Gemini mode: {full_prompt[:1000]}".encode("utf-8"))
+            req = urllib.request.Request(
+                gemini_url,
+                data=gemini_payload if gemini_key else None,
+                headers={"Content-Type": "application/json", "User-Agent": "ORION/6.0"},
+            )
+            with urllib.request.urlopen(req, timeout=20, context=SSL_CTX) as resp:
+                text = resp.read().decode("utf-8").strip()
+                if gemini_key and text:
+                    result = json.loads(text)
+                    candidates = result.get("candidates", [])
+                    if candidates:
+                        candidate_text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+                        if candidate_text:
+                            return cache_and_return(candidate_text)
+                elif text and len(text) > 5:
+                    return cache_and_return(text)
+        except Exception as e:
+            print(f"[ORION] Gemini: {e}")
+
+        # === Backend 3: HuggingFace Mistral 7B ===
         try:
             hf_payload = json.dumps({
                 "inputs": f"<s>[INST] {full_prompt[:800]} [/INST]",
-                "parameters": {"max_new_tokens": 300, "temperature": 0.7}
+                "parameters": {"max_new_tokens": 400, "temperature": 0.7}
             }).encode()
             req = urllib.request.Request(
                 "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2",
                 data=hf_payload,
                 headers={"Content-Type": "application/json", "User-Agent": "ORION/6.0"},
             )
-            with urllib.request.urlopen(req, timeout=25, context=SSL_CTX) as resp:
+            with urllib.request.urlopen(req, timeout=30, context=SSL_CTX) as resp:
                 result = json.loads(resp.read().decode())
                 if isinstance(result, list) and len(result) > 0:
                     text = result[0].get("generated_text", "")
                     if text and len(text) > 20:
-                        # Extract response after [/INST]
                         if "[/INST]" in text:
                             text = text.split("[/INST]")[-1].strip()
-                        _ai_cache[cache_key] = {"response": text, "time": time.time()}
-                        return text
+                        return cache_and_return(text)
         except Exception as e:
-            print(f"[ORION] HuggingFace fallback: {e}")
+            print(f"[ORION] HuggingFace Mistral: {e}")
+
+        # === Backend 4: HuggingFace Zephyr (ultimo recurso) ===
+        try:
+            hf_payload2 = json.dumps({
+                "inputs": f"<|system|>\n{system_prompt[:300]}</s>\n<|user|>\n{prompt[:600]}</s>\n<|assistant|>\n",
+                "parameters": {"max_new_tokens": 300}
+            }).encode()
+            req2 = urllib.request.Request(
+                "https://api-inference.huggingface.co/models/HuggingFaceH4/zephyr-7b-beta",
+                data=hf_payload2,
+                headers={"Content-Type": "application/json", "User-Agent": "ORION/6.0"},
+            )
+            with urllib.request.urlopen(req2, timeout=30, context=SSL_CTX) as resp2:
+                result2 = json.loads(resp2.read().decode())
+                if isinstance(result2, list) and len(result2) > 0:
+                    text2 = result2[0].get("generated_text", "")
+                    if text2 and len(text2) > 20 and "<|assistant|>" in text2:
+                        text2 = text2.split("<|assistant|>")[-1].strip()
+                        return cache_and_return(text2)
+        except Exception as e:
+            print(f"[ORION] Zephyr: {e}")
 
         return None
 
@@ -328,6 +472,63 @@ class OrionBrain:
         ]
         return any(kw in msg for kw in need_search_keywords)
 
+    def _enrich_with_knowledge(self, message: str) -> str:
+        """Enriquece a mensagem com contexto de RAG, KG e EpisodicMemory."""
+        parts = []
+
+        # 1. RAG - busca contexto em documentos indexados
+        if self.self_healing and self.self_healing.can_proceed("rag_system"):
+            try:
+                if self.rag:
+                    _, sources = self.rag.augment_prompt(message, "", top_k=2)
+                    if sources:
+                        parts.append("[RAG] Documentos relevantes encontrados.")
+                        self.self_healing.record_success("rag_system")
+            except Exception as e:
+                print(f"[ORION] RAG error: {e}")
+                if self.self_healing:
+                    self.self_healing.record_failure("rag_system")
+
+        # 2. KnowledgeGraph - responde directamente se tiver dados
+        if self.self_healing and self.self_healing.can_proceed("knowledge_graph"):
+            try:
+                if self.kg_query:
+                    kg_answer = self.kg_query.ask(message)
+                    if kg_answer and len(kg_answer) > 10:
+                        parts.append(f"[KnowledgeGraph] {kg_answer}")
+                        self.self_healing.record_success("knowledge_graph")
+            except Exception as e:
+                print(f"[ORION] KG error: {e}")
+                if self.self_healing:
+                    self.self_healing.record_failure("knowledge_graph")
+
+        # 3. EpisodicMemory - eventos similares passados
+        if self.self_healing and self.self_healing.can_proceed("episodic_memory"):
+            try:
+                if self.episodic:
+                    episodes = self.episodic.query(message, limit=2)
+                    if episodes:
+                        parts.append(f"[Episodios passados] {len(episodes)} episodios similares encontrados.")
+                        self.self_healing.record_success("episodic_memory")
+            except Exception as e:
+                print(f"[ORION] EpisodicMemory error: {e}")
+                if self.self_healing:
+                    self.self_healing.record_failure("episodic_memory")
+
+        # 4. GoalPlanner - verifica se ha objetivos ativos relacionados
+        try:
+            if self.goal_planner:
+                goals = self.goal_planner.get_active_goals()
+                if goals:
+                    # Filtra objetivos que mencionam a mensagem
+                    relevant = [g for g in goals if any(w in g.title.lower() for w in message.lower().split()[:5])]
+                    if relevant:
+                        parts.append(f"[Objetivos ativos relacionados] {len(relevant)} objetivo(s) encontrado(s).")
+        except Exception as e:
+            print(f"[ORION] GoalPlanner query error: {e}")
+
+        return "\n".join(parts)
+
     def think(self, message: str) -> str:
         msg_lower = message.lower().strip()
         self.add_to_history("user", message)
@@ -349,43 +550,104 @@ class OrionBrain:
             return self._mode_web_research(message)
         if "[FETCH]" in message:
             return self._mode_fetch_url(message)
+        if "[RESET]" in message:
+            self.conversation_history = []
+            result = "🧹 **Contexto limpo!** Vamos comecar de novo."
+            self.add_to_history("assistant", result)
+            self.save_to_github("assistant", result, "reset")
+            return result
         if "[MEMORIA]" in message:
             return self._mode_memory(message)
 
+        # === CONHECIMENTO INTERNO (RAG + KG + EpisodicMemory) ===
+        knowledge_context = self._enrich_with_knowledge(message)
+        has_knowledge = bool(knowledge_context.strip())
+
+        # === RECOMENDACOES DO AUTONOMOUSLEARNER ===
+        learner_mode = None
+        if self.learner:
+            try:
+                recs = self.learner.get_recommendations()
+                if recs and isinstance(recs, dict):
+                    learner_mode = recs.get("suggested_mode")
+            except Exception:
+                pass
+
+        # Se learner sugere modo ANALISE, e a query parece de pesquisa, promove
+        if learner_mode == "analyze" and self._requires_web_search(message):
+            message += " [ANALISAR]"
+
         # === DECISAO AUTONOMA DE PESQUISAR ===
-        # Se a query parece precisar de informacao atual, pesquisa primeiro
         should_search = self._requires_web_search(message)
         web_context = None
         if should_search:
-            web_context = self.web_search(message, fetch_pages=True)
-            print(f"[ORION] Pesquisa autonoma ativada para: {message[:60]}...")
+            if self.self_healing and self.self_healing.can_proceed("web_scraper"):
+                web_context = self.web_search(message, fetch_pages=True)
+                print(f"[ORION] Pesquisa autonoma ativada para: {message[:60]}...")
+                if self.self_healing:
+                    if web_context:
+                        self.self_healing.record_success("web_scraper")
+                    else:
+                        self.self_healing.record_failure("web_scraper")
+
+        # === CRIA OBJETIVO NO GOALPLANNER SE A QUERY FOR UMA ACAO ===
+        action_keywords = ["cria", "faz", "implementa", "desenvolve", "planeia", "organiza", "configura"]
+        if self.goal_planner and any(message.lower().startswith(kw) for kw in action_keywords):
+            try:
+                self.goal_planner.create_goal(
+                    title=message[:60],
+                    description=message,
+                    target_date="",
+                )
+                print(f"[ORION] Objetivo criado automaticamente: {message[:40]}...")
+            except Exception as e:
+                print(f"[ORION] GoalPlanner create error: {e}")
+
+        # === REGISTA INTENCAO NA PROSPECTIVEMEMORY ===
+        if self.prospective:
+            try:
+                if self._requires_web_search(message):
+                    self.prospective.record_intention(
+                        title=f"Investigar: {message[:50]}",
+                        description=f"Pesquisa automatica gerada pela pergunta do utilizador",
+                        trigger=message[:100],
+                    )
+            except Exception as e:
+                print(f"[ORION] ProspectiveMemory error: {e}")
+
+        # === MONTA O PROMPT COM TODO O CONTEXTO DISPONIVEL ===
+        prompt_parts = [message]
+        if has_knowledge:
+            prompt_parts.append(f"\n\nContexto interno:\n{knowledge_context}")
+        if web_context:
+            prompt_parts.append(f"\n\nContexto web:\n{web_context[:1500]}")
+
+        full_prompt = "\n".join(prompt_parts)
+        context = self.get_context(max_messages=8)
+        system = ("ORION General v6.0 - Assistente IA em portugues de Portugal. "
+                  "Responde de forma natural, util e honesta. "
+                  "Usa markdown quando apropriado. Tens contexto da conversa abaixo. "
+                  "Se nao souberes algo, diz 'NAO SEI'.")
 
         if web_context:
-            # Alimenta a IA com o contexto da web (concatenado para caber no limite)
-            system = ("ORION General v6.0 - Responde com base nos resultados da web abaixo. "
-                      "Citra as fontes. Responde em portugues de Portugal.")
-            context_summary = web_context[:1500]
-            prompt = f"Pergunta: {message}\n\nContexto web:\n{context_summary}"
-            ai_response = self.call_ai(prompt, system)
+            # Já tem contexto web + possivelmente interno - IA enriquece
+            ai_response = self.call_ai(full_prompt, system + " Responde com base nos resultados da web.")
             if ai_response and len(ai_response) > 15:
                 enriched = f"{ai_response}\n\n---\n🔍 *Pesquisa web autonoma*"
                 self.add_to_history("assistant", enriched)
                 self.save_to_github("assistant", enriched, "ai+web")
                 self._record_learning(message, enriched, "ai+web")
                 return enriched
-            # Se IA falhou com contexto, usa os resultados diretamente
             result = f"**{message}**\n\n{web_context}"
             self.add_to_history("assistant", result)
             self.save_to_github("assistant", result, "web")
             self._record_learning(message, result, "web")
             return result
 
-        # === Tenta AI real primeiro (como Claude) ===
-        system = ("ORION General v6.0 - Assistente IA em portugues de Portugal. "
-                  "Responde de forma natural, util e honesta. "
-                  "Usa markdown quando apropriado. Se nao souberes algo, diz 'NAO SEI'.")
+        # === Tenta AI com contexto (conversa + conhecimento interno) ===
+        prompt_with_context = f"{full_prompt}\n\nContexto da conversa:\n{context}" if context else full_prompt
 
-        ai_response = self.call_ai(message, system)
+        ai_response = self.call_ai(prompt_with_context, system)
         if ai_response and len(ai_response) > 10:
             # Detecta se a IA nao sabe a resposta -> pesquisa web automaticamente
             unsure_patterns = [
@@ -746,9 +1008,78 @@ if FASTAPI_AVAILABLE:
         brain.record_feedback(req.query, req.response, req.feedback)
         return {"status": "ok", "feedback": req.feedback}
 
+    class UploadRequest(BaseModel):
+        name: str
+        content: str
+
+    @app.post("/api/upload")
+    async def upload_file(req: UploadRequest):
+        """Processa um ficheiro: extrai texto, identifica tipo, analisa"""
+        name = req.name
+        content = req.content[:10000]
+        ext = Path(name).suffix.lower() if "." in name else ""
+        lang_map = {
+            ".py": "Python", ".js": "JavaScript", ".ts": "TypeScript",
+            ".html": "HTML", ".css": "CSS", ".json": "JSON",
+            ".md": "Markdown", ".csv": "CSV", ".xml": "XML",
+            ".yaml": "YAML", ".yml": "YAML", ".sh": "Shell",
+            ".bat": "Batch", ".ps1": "PowerShell", ".sql": "SQL",
+            ".txt": "Texto", ".log": "Log", ".env": "Env",
+        }
+        lang = lang_map.get(ext, "Texto")
+        lines = content.count("\n") + 1
+        words = len(content.split())
+        summary = content[:300] + ("..." if len(content) > 300 else "")
+
+        # Se o ficheiro for pequeno, pede analise a IA
+        analysis = None
+        if len(content) < 4000:
+            analysis = brain.call_ai(
+                f"Analisa este ficheiro ({name}, {lang}, {lines} linhas):\n\n{content[:2000]}",
+                "ORION v6 - Analisador de codigo. Responde em PT-PT."
+            )
+
+        return {
+            "name": name,
+            "type": lang,
+            "lines": lines,
+            "words": words,
+            "preview": summary,
+            "analysis": analysis,
+            "processed": True,
+        }
+
     @app.get("/api/learning/stats")
     async def learning_stats():
-        return brain.get_learning_stats()
+        stats = brain.get_learning_stats()
+        # Adiciona info extra
+        if brain.conversation_history:
+            stats["conversation_count"] = len(brain.conversation_history)
+            feedbacks = [m for m in brain.conversation_history if "feedback" in str(m).lower()]
+            stats["feedbacks_given"] = len(feedbacks)
+        if brain.scraper:
+            try:
+                stats["web_cache"] = brain.scraper.get_stats()
+            except Exception:
+                pass
+        return stats
+
+    @app.get("/api/learning/stats/summary")
+    async def learning_stats_summary():
+        """Resumo conciso para exibir na UI"""
+        stats = brain.get_learning_stats()
+        summary = {
+            "conversations": len(brain.conversation_history),
+            "total_interactions": stats.get("learning", {}).get("total_interactions", 0)
+                if isinstance(stats.get("learning"), dict) else 0,
+            "patterns_discovered": len(stats.get("learning", {}).get("discovered_patterns", []))
+                if isinstance(stats.get("learning"), dict) else 0,
+            "evolution_metrics": stats.get("evolution", {})
+                if isinstance(stats.get("evolution"), dict) else {},
+            "web_cached_queries": stats.get("web_cache", {}).get("cached_queries", 0)
+                if isinstance(stats.get("web_cache"), dict) else 0,
+        }
+        return summary
 
     @app.get("/api/learning/patterns")
     async def learning_patterns():

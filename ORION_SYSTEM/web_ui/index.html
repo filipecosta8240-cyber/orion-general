@@ -194,6 +194,27 @@
         .feedback-btn.disliked { color: #f87171; }
         .feedback-btn.sent { opacity: 0.5; cursor: default; }
 
+        /* TTS & Stats */
+        .action-btn { background: none; border: none; cursor: pointer; font-size: 0.8rem; padding: 2px 6px; border-radius: 4px; color: #666; transition: all 0.15s; }
+        .action-btn:hover { background: rgba(255,255,255,0.1); color: #4ade80; }
+        .action-btn.speaking { color: #4ade80; background: rgba(74,222,128,0.15); }
+
+        .stats-panel {
+            position: fixed; top: 0; right: -360px; width: 340px; height: 100vh;
+            background: #16213e; border-left: 1px solid rgba(255,255,255,0.1);
+            padding: 20px; transition: right 0.3s ease; z-index: 100;
+            overflow-y: auto; -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
+        }
+        .stats-panel.open { right: 0; }
+        .stats-panel h2 { color: #4ade80; font-size: 1rem; margin-bottom: 16px; }
+        .stats-panel .stat-row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,0.05); font-size: 0.85rem; }
+        .stats-panel .stat-row .label { color: #999; }
+        .stats-panel .stat-row .value { color: #4ade80; font-weight: 500; }
+        .stats-panel .close-btn { position: absolute; top: 12px; right: 12px; background: none; border: none; color: #666; font-size: 1.2rem; cursor: pointer; }
+        .stats-panel .close-btn:hover { color: #f87171; }
+        .overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 99; display: none; }
+        .overlay.show { display: block; }
+
         @media (max-width: 600px) {
             .message { max-width: 95%; font-size: 0.85rem; }
             .quick-actions button { font-size: 0.65rem; padding: 4px 9px; }
@@ -207,7 +228,10 @@
             <h1>ORION GENERAL</h1>
             <span class="subtitle">v6.0</span>
         </div>
-        <span class="status checking" id="status">A conectar...</span>
+        <div style="display:flex;gap:8px;align-items:center">
+            <button onclick="toggleStats()" style="background:none;border:none;color:#666;cursor:pointer;font-size:1rem;" title="Estatisticas">📊</button>
+            <span class="status checking" id="status">A conectar...</span>
+        </div>
     </div>
 
     <div class="chat-container" id="chat">
@@ -217,18 +241,19 @@
             <br>
             <p><strong>Modos rapidos:</strong></p>
             <ul>
-                <li><code>[DEEP DIVE]</code> Auditoria completa</li>
-                <li><code>[URGENTE]</code> Resposta urgente</li>
-                <li><code>[ANALISAR]</code> Analise detalhada</li>
-                <li><code>[COMPARAR]</code> Comparacao</li>
-                <li><code>[RISCOS]</code> Analise de riscos</li>
-                <li><code>[RESUMIR]</code> Resumo executivo</li>
+                <li><code>[DEEP DIVE]</code> Auditoria</li>
+                <li><code>[URGENTE]</code> Urgente</li>
+                <li><code>[ANALISAR]</code> Analise</li>
+                <li><code>[COMPARAR]</code> Comparar</li>
+                <li><code>[RISCOS]</code> Riscos</li>
+                <li><code>[RESUMIR]</code> Resumo</li>
                 <li><code>[PESQUISAR]</code> Pesquisa web</li>
                 <li><code>[FETCH]</code> Ler URL</li>
-                <li><code>[MEMORIA]</code> Consultar memoria</li>
+                <li><code>[MEMORIA]</code> Memoria</li>
+                <li><code>[RESET]</code> Limpar contexto</li>
             </ul>
             <br>
-            <p style="color:#666;font-size:0.8rem;">Dica: Ctrl+K para focar o input · Anexa ficheiros com 📎 · A IA pesquisa a web automaticamente quando nao sabe</p>
+            <p style="color:#666;font-size:0.8rem;">📎 Ficheiros · 🔊 TTS · 📊 Estatisticas · IA pesquisa web quando nao sabe</p>
         </div>
     </div>
 
@@ -242,6 +267,18 @@
         <button onclick="sendQuick('[PESQUISAR] ')">PESQUISAR</button>
         <button onclick="sendQuick('[FETCH] ')">FETCH URL</button>
         <button onclick="sendQuick('[MEMORIA] ')">MEMORIA</button>
+        <button onclick="sendQuick('[RESET] ')" style="color:#f87171;border-color:#f8717133;">RESET</button>
+    </div>
+
+    <div class="overlay" id="overlay" onclick="toggleStats()"></div>
+    <div class="stats-panel" id="statsPanel">
+        <button class="close-btn" onclick="toggleStats()">×</button>
+        <h2>📊 Estatisticas ORION</h2>
+        <div id="statsContent">
+            <p style="color:#666;font-size:0.85rem;">A carregar...</p>
+        </div>
+        <br>
+        <button onclick="refreshStats()" style="padding:6px 14px;border:1px solid rgba(74,222,128,0.3);border-radius:8px;background:transparent;color:#4ade80;cursor:pointer;width:100%;font-size:0.85rem;">🔄 Atualizar</button>
     </div>
 
     <div class="input-container">
@@ -400,10 +437,29 @@
             if (!text && !fileContent) return;
             if (isProcessing) return;
 
+            // Se tem ficheiro, manda para /api/upload primeiro
             if (fileContent) {
-                const ext = fileName ? fileName.split('.').pop() : '';
-                text = `[Ficheiro: ${fileName}]\n\`\`\`${ext}\n${fileContent.slice(0, 4000)}\n\`\`\`\n\n${text || `Analisa este ficheiro (${fileName}).`}`;
+                addTyping();
+                try {
+                    const uploadRes = await fetch('/api/upload', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ name: fileName, content: fileContent.slice(0, 10000) })
+                    });
+                    const uploadData = await uploadRes.json();
+                    removeTyping();
+                    if (uploadData.analysis) {
+                        const msg = `**📄 ${fileName}** (${uploadData.type}, ${uploadData.lines} linhas)\n\n${uploadData.analysis}`;
+                        addMessage(msg);
+                    } else {
+                        text = `[Ficheiro: ${fileName} - ${uploadData.type}, ${uploadData.lines} linhas]\n\`\`\`\n${fileContent.slice(0, 4000)}\n\`\`\`\n\n${text || `Analisa este ficheiro.`}`;
+                    }
+                } catch(e) {
+                    removeTyping();
+                    text = `[Ficheiro: ${fileName}]\n\`\`\`\n${fileContent.slice(0, 4000)}\n\`\`\`\n\n${text || `Analisa este ficheiro.`}`;
+                }
                 removeFile();
+                if (!text) { isProcessing = false; sendBtn.disabled = false; return; }
             }
 
             lastQuery = text;
@@ -422,7 +478,15 @@
                 const data = await res.json();
                 removeTyping();
                 lastResponse = data.response || '';
-                addMessage(lastResponse || '*Sem resposta*');
+                const msgDiv = addMessage(lastResponse || '*Sem resposta*');
+                // Add TTS button
+                const ttsBtn = document.createElement('button');
+                ttsBtn.className = 'action-btn';
+                ttsBtn.title = 'Ler em voz alta';
+                ttsBtn.innerHTML = '🔊';
+                ttsBtn.onclick = function() { speak(lastResponse, ttsBtn); };
+                const fbBar = msgDiv.querySelector('.feedback-bar');
+                if (fbBar) fbBar.parentNode.insertBefore(ttsBtn, fbBar);
             } catch(e) {
                 removeTyping();
                 addMessage('**Erro de conexao** — Verifica se o servidor esta online.');
@@ -430,6 +494,59 @@
                 isProcessing = false;
                 sendBtn.disabled = false;
                 input.focus();
+            }
+        }
+
+        // === TTS ===
+        function speak(text, btn) {
+            if (!window.speechSynthesis) return;
+            if (btn.classList.contains('speaking')) {
+                window.speechSynthesis.cancel();
+                btn.classList.remove('speaking');
+                return;
+            }
+            window.speechSynthesis.cancel();
+            const clean = text.replace(/[#*`\[\]]/g, '').slice(0, 3000);
+            const utter = new SpeechSynthesisUtterance(clean);
+            utter.lang = 'pt-PT';
+            utter.rate = 0.9;
+            utter.onend = () => btn.classList.remove('speaking');
+            btn.classList.add('speaking');
+            window.speechSynthesis.speak(utter);
+        }
+
+        // === Stats ===
+        async function toggleStats() {
+            const panel = document.getElementById('statsPanel');
+            const overlay = document.getElementById('overlay');
+            const open = panel.classList.toggle('open');
+            overlay.classList.toggle('show', open);
+            if (open) await refreshStats();
+        }
+
+        async function refreshStats() {
+            const el = document.getElementById('statsContent');
+            try {
+                const res = await fetch('/api/learning/stats/summary');
+                const data = await res.json();
+                let html = '';
+                const rows = [
+                    ['💬 Conversas', data.conversations || 0],
+                    ['🔄 Interacoes', data.total_interactions || 0],
+                    ['🔍 Padroes descobertos', data.patterns_discovered || 0],
+                    ['🌐 Pesquisas em cache', data.web_cached_queries || 0],
+                ];
+                if (data.evolution_metrics) {
+                    for (const [k, v] of Object.entries(data.evolution_metrics)) {
+                        rows.push([k.replace(/_/g, ' '), typeof v === 'number' ? v.toFixed(2) : v]);
+                    }
+                }
+                rows.forEach(([label, val]) => {
+                    html += `<div class="stat-row"><span class="label">${label}</span><span class="value">${val}</span></div>`;
+                });
+                el.innerHTML = html || '<p style="color:#666;font-size:0.85rem;">Nenhuma estatistica disponivel.</p>';
+            } catch(e) {
+                el.innerHTML = '<p style="color:#f87171;">Erro ao carregar estatisticas.</p>';
             }
         }
 
