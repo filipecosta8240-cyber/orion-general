@@ -272,7 +272,7 @@ class ORIONHandler(BaseHTTPRequestHandler):
         return []
 
     def call_general(self, message):
-        msg = message.lower()
+        msg = message.lower().strip()
         ctx = ("CONTEXTO: Microquinta avicola em Portugal. "
                "Plantel: 3 baias - RIR (1M 7F), JG (1M 3F + 12 pintos 6sem ~3 hibridos), Araucana (1M 1F). "
                "Producao: ~10 ovos/dia. Preco: 2.50EUR/dozinha. Objetivo: Estabilizar os 3 grupos.")
@@ -285,12 +285,8 @@ class ORIONHandler(BaseHTTPRequestHandler):
                     "2. Aguardar eclosao 4 Julho (7 ovos)\n"
                     "3. Separar hibridos quando necessario\n"
                     "4. Monitorizar postura Araucana\n\nCONFIANCA: 85%")
-        elif "urgente" in msg:
-            return (f"[URGENTE] Diagnostico rapido\n\nSITUACAO: {message}\n\n"
-                    "DIAGNOSTICO: Analise processada\n"
-                    "ACAO: Proceder com recomendacoes\n"
-                    "JUSTIFICATIVA: Baseado em dados do plantel\n\nCONFIANCA: 75%")
-        elif "memoria" in msg:
+
+        if "memoria" in msg:
             return (f"[MEMORIA] Sistema de memoria\n\n{ctx}\n\n"
                     "ESTATISTICAS:\n"
                     "- Total memorias: 29\n"
@@ -299,21 +295,22 @@ class ORIONHandler(BaseHTTPRequestHandler):
                     "- Receita: ~62.50EUR/mes\n"
                     "- Custo: ~110-145EUR/mes\n"
                     "- Saldo: -50 a -80EUR/mes")
-        elif "pesquisar" in msg:
-            return (f"[PESQUISAR] Web scraping\n\nPESQUISA: {message}\n\n"
-                    "RESULTADOS:\n"
-                    "- Mercado galinhas Portugal: Estavel\n"
-                    "- Tendencia ovos artesanais: Crescimento\n"
-                    "- Certificacao biologica: Disponivel\n"
-                    "- Canais venda: Feiras, CSA, Restaurantes")
-        elif "comparar" in msg:
+
+        if "urgente" in msg:
+            return (f"[URGENTE] Diagnostico rapido\n\nSITUACAO: {message}\n\n"
+                    "DIAGNOSTICO: Analise processada\n"
+                    "ACAO: Proceder com recomendacoes\n"
+                    "JUSTIFICATIVA: Baseado em dados do plantel\n\nCONFIANCA: 75%")
+
+        if "comparar" in msg:
             return (f"[COMPARAR] Comparacao\n\nPEDIDO: {message}\n\n"
                     "OPCOES:\n"
                     "1. Ovos normais: 2.50EUR/dozinha\n"
                     "2. Ovos azuis (Araucana): 3.00EUR/6 = 6.00EUR/dozinha\n"
                     "3. Hibridos: Mistura de qualidades\n\n"
                     "RECOMENDACAO: Ovos azuis valem mais!")
-        elif "riscos" in msg:
+
+        if "riscos" in msg:
             return (f"[RISCOS] Analise de riscos\n\nPEDIDO: {message}\n\n"
                     "RISCOS IDENTIFICADOS:\n"
                     "1. Calor afetando fertilidade (BAIXO)\n"
@@ -321,7 +318,8 @@ class ORIONHandler(BaseHTTPRequestHandler):
                     "3. Hibridos com geneticas imprevisiveis (MEDIO)\n"
                     "4. Custo superior a receita (ALTO)\n\n"
                     "MITIGACAO: Ventilacao, rotina, selecao")
-        elif "resumir" in msg:
+
+        if "resumir" in msg:
             return (f"[RESUMIR] Resumo executivo\n\n{ctx}\n\n"
                     "RESUMO:\n"
                     "- Plantel funcional mas com problemas de calor\n"
@@ -329,29 +327,115 @@ class ORIONHandler(BaseHTTPRequestHandler):
                     "- Custo: 110-145EUR/mes\n"
                     "- Prejuizo: 50-80EUR/mes (hobby)\n"
                     "- Proximo passo: Estabilizar grupos")
-        elif "analise" in msg or "analisar" in msg:
+
+        if "pesquisar" in msg:
+            return (f"[PESQUISAR] Web scraping\n\nPESQUISA: {message}\n\n"
+                    "RESULTADOS:\n"
+                    "- Mercado galinhas Portugal: Estavel\n"
+                    "- Tendencia ovos artesanais: Crescimento\n"
+                    "- Certificacao biologica: Disponivel\n"
+                    "- Canais venda: Feiras, CSA, Restaurantes")
+
+        if "analise" in msg or "analisar" in msg:
             return (f"[ANALISE] Analise detalhada\n\nPEDIDO: {message}\n\n{ctx}\n\n"
                     "METODO: Analise estrategica\nRESULTADO: Dados processados\nCONFIANCA: 75%")
-        elif "planta" in msg or "galinha" in msg or "ovo" in msg:
-            return (f"PLANTER AVICOLA - Resumo\n\n{ctx}\n\n"
-                    "PRODUCAO HOJE:\n"
-                    "- RIR: 6 ovos\n- JG/Hibridas: 3 ovos\n- Araucana: 1 ovo\n- Total: 10 ovos\n\n"
-                    "PROXIMOS PASSOS:\n"
-                    "1. Eclosao 4 Julho (7 ovos)\n"
-                    "2. Separar pintainhos quando necessario\n"
-                    "3. Melhorar ventilacao")
 
-        try:
-            sys.path.insert(0, str(PROJECT_ROOT))
-            from orion.agents import get_general
-            general = get_general()
-            result = general.think(message)
-            if result and "0 fontes" not in result:
-                return result
-        except Exception:
-            pass
+        return self._smart_response(message, msg, ctx)
 
-        return f"ORION General Agent v5.0\n\nMensagem: {message}\n\n{ctx}\n\nMODOS DISPONIVEIS:\n- [DEEP DIVE] Auditoria completa\n- [URGENTE] Diagnostico rapido\n- [ANALISAR] Analise detalhada\n- [COMPARAR] Comparacao\n- [RISCOS] Foco em riscos\n- [RESUMIR] Resumo\n- [PESQUISAR] Web\n- [MEMORIA] Consultar memoria"
+    def _smart_response(self, message, msg, ctx):
+        if any(w in msg for w in ["doenca", "doente", "problema", "machuc", "ferid", "morreu", "mort"]):
+            return (f"DIAGNOSTICO DE SAUDE\n\n{ctx}\n\n"
+                    "SITUACAO: Sem problemas de saude reportados.\n\n"
+                    "RECOMENDACOES:\n"
+                    "- Monitorizar comportamento diariamente\n"
+                    "- Verificar penas, olhos, mobilidade\n"
+                    "- Manter agua limpa sempre disponivel\n"
+                    "- Ventilacao adequada (especialmente no calor)\n\n"
+                    f"Pergunta especifica: {message}")
+
+        if any(w in msg for w in ["dinheiro", "ganho", "lucro", "receita", "custo", "preco", "vend", "quanto ganho", "quanto ganhas"]):
+            return (f"FINANCAS DA MICROQUINTA\n\n{ctx}\n\n"
+                    "RECEITA:\n"
+                    "- ~10 ovos/dia x 30 dias = ~300 ovos/mes\n"
+                    "- ~25 duzias/mes x 2.50EUR = ~62.50EUR/mes\n\n"
+                    "CUSTOS:\n"
+                    "- Racao: ~60-80EUR/mes\n"
+                    "- Cama: ~15-20EUR/mes\n"
+                    "- Veterinario: ~15-20EUR/mes\n"
+                    "- Variavel: ~20-25EUR/mes\n"
+                    "- Total: ~110-145EUR/mes\n\n"
+                    "SALDO: -50 a -80EUR/mes (hobby, nao lucrativo)\n\n"
+                    "NOTA: Ovos azuis (Araucana) valem mais: 6.00EUR/dozinha\n\n"
+                    f"Pergunta especifica: {message}")
+
+        if any(w in msg for w in ["incubar", "incubacao", "eclosao", "chocadeira", "nasc", "ovos no incub"]):
+            return (f"INCUBACAO\n\n{ctx}\n\n"
+                    "INCUBACAO ATUAL:\n"
+                    "- 7 ovos no incubador\n"
+                    "- 2 Araucana + 5 RIR\n"
+                    "- Iniciada: 13 Junho 2026\n"
+                    "- Paragem viragem: 1 Julho 2026\n"
+                    "- Eclosao prevista: 4 Julho 2026\n\n"
+                    f"Pergunta especifica: {message}")
+
+        if any(w in msg for w in ["ovo", "ovos", "bota", "postura", "botam"]):
+            return (f"PRODUCAO DE OVOS\n\n{ctx}\n\n"
+                    "SITUACAO ATUAL:\n"
+                    "- RIR: 6 ovos/dia (producao estavel)\n"
+                    "- JG/Hibridas: 3 ovos/dia\n"
+                    "- Araucana: 1 ovo/dia (irregular)\n"
+                    "- Total: ~10 ovos/dia\n\n"
+                    "PRECO:\n"
+                    "- Normais: 2.50EUR/dozinha\n"
+                    "- Azuis (Araucana): 3.00EUR/6 = 6.00EUR/dozinha\n\n"
+                    "RECEITA: ~62.50EUR/mes\n\n"
+                    f"Pergunta especifica: {message}")
+
+        if any(w in msg for w in ["baia", "baias", "local", "espaco", "gaiola", "curral"]):
+            return (f"BAIAS DO PLANTEL\n\n{ctx}\n\n"
+                    "- Baia 1 (RIR): 20m2 - 1M + 7F\n"
+                    "- Baia 2 (JG): Nao especificado - 1M + 3F + 12 pintos\n"
+                    "- Baia 3 (Araucana): 4m2 - 1M + 1F\n\n"
+                    f"Pergunta especifica: {message}")
+
+        if any(w in msg for w in ["racao", "comida", "alimentacao", "comer", "water", "agua"]):
+            return (f"ALIMENTACAO\n\n{ctx}\n\n"
+                    "- Racao para gallinhas poedeiras\n"
+                    "- Agua limpa sempre disponivel\n"
+                    "- Suplementos de calcio para casca dos ovos\n"
+                    "- Trato: milho, restos de cozinha\n\n"
+                    f"Pergunta especifica: {message}")
+
+        if any(w in msg for w in ["galo", "macho", "reproduc"]):
+            return (f"MACHOS DO PLANTEL\n\n{ctx}\n\n"
+                    "- Baia 1: 1 macho RIR (reprodutor)\n"
+                    "- Baia 2: 1 macho JG (reprodutor)\n"
+                    "- Baia 3: 1 macho Araucana 'Bigodao' (reprodutor)\n\n"
+                    "TOTAL: 3 machos adultos\n\n"
+                    f"Pergunta especifica: {message}")
+
+        if any(w in msg for w in ["galinha", "galinhas", "ave", "aves", "pinto", "pintos", "pintainho"]):
+            return (f"PLANTEL AVICOLA\n\n{ctx}\n\n"
+                    "DISTRIBUICAO:\n"
+                    "- Baia 1 (RIR): 1 macho + 7 femeas\n"
+                    "- Baia 2 (JG): 1 macho + 3 femeas + 12 pintos (6 sem)\n"
+                    "- Baia 3 (Araucana): 1 macho Bigodao + 1 femea Pompom\n\n"
+                    "SAUDE:\n"
+                    "- RIR: Estaveis\n"
+                    "- JG: Estaveis, hibridos em crescimento\n"
+                    "- Araucana: Postura irregular (26/6=1, 27/6=1, 28/6=0, 29/6=0, 30/6=1)\n\n"
+                    f"Pergunta especifica: {message}")
+
+        return (f"ORION General v5.0\n\nPergunta: {message}\n\n{ctx}\n\n"
+                "Nao tenho uma resposta especifica para isso. Tenta perguntar sobre:\n"
+                "- Ovos / producao\n"
+                "- Galinhas / plantel\n"
+                "- Saude / doencas\n"
+                "- Dinheiro / financas\n"
+                "- Incubacao\n"
+                "- Baias / espaco\n"
+                "- Alimentacao\n\n"
+                "Ou usa os botoes: DEEP DIVE, MEMORIA, URGENTE, etc.")
 
     def send_json(self, data):
         response = json.dumps(data, ensure_ascii=False).encode()
