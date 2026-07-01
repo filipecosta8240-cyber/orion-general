@@ -1,128 +1,813 @@
 """
-ORION General Agent - Cloud Server v2
-======================================
-Servidor simplificado para Railway.
-HTML embutido no código - sem dependência de ficheiros externos.
+ORION General Agent - Cloud Server v6.0
+========================================
+Servidor completo para Railway com:
+- FastAPI + Uvicorn
+- Integracao com pacote orion/ (General Agent, WebScraper, Memoria)
+- Chat com IA via Pollinations/HuggingFace
+- Pesquisa web em tempo real (DuckDuckGo)
+- Memoria persistente (curto e longo prazo)
+- Streaming SSE
+- UI estilo Claude Desktop
 """
 
 import json
-import sys
 import os
-import urllib.request
-import urllib.parse
 import re
 import ssl
+import time
+import urllib.parse
+import urllib.request
+import uuid
 from pathlib import Path
-from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
+from typing import Optional, List, Dict, Any
+from datetime import datetime, timezone
+from contextlib import asynccontextmanager
 
+try:
+    from fastapi import FastAPI, HTTPException, Request
+    from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
+    from fastapi.staticfiles import StaticFiles
+    from fastapi.middleware.cors import CORSMiddleware
+    from pydantic import BaseModel
+    import uvicorn
+    FASTAPI_AVAILABLE = True
+except ImportError:
+    FASTAPI_AVAILABLE = False
+
+# SSL config
 SSL_CTX = ssl.create_default_context()
 SSL_CTX.check_hostname = False
 SSL_CTX.verify_mode = ssl.CERT_NONE
 
-PORT = int(os.environ.get('PORT', 8080))
+PORT = int(os.environ.get("PORT", 8080))
 PROJECT_ROOT = Path(__file__).resolve().parent
-
-# Token GitHub (via variável de ambiente no Railway)
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 
-# HTML embutido
-HTML_PAGE = """<!DOCTYPE html>
+# --- Rate limiting ---
+_last_ai_call = 0
+_ai_call_lock = __import__("threading").Lock()
+
+# --- Tenta importar do pacote orion/ ---
+try:
+    from orion.agents import General, get_general
+    from orion.web_scraper import WebScraper, get_web_scraper
+    from orion.long_term_memory import LongTermMemory, get_long_term_memory, MemoryType
+    from orion.memory import ObsidianMemoryBridge
+    ORION_IMPORTED = True
+except ImportError as e:
+    ORION_IMPORTED = False
+    print(f"[ORION] Aviso: pacote orion/ nao importado ({e}). Usando modo standalone.")
+
+
+# =====================================================
+# ORION BRAIN - Motor de inteligencia unificado
+# =====================================================
+
+class OrionBrain:
+    def __init__(self):
+        self.general: Optional[General] = None
+        self.scraper: Optional[WebScraper] = None
+        self.ltm: Optional[LongTermMemory] = None
+        self.memory: Optional[ObsidianMemoryBridge] = None
+        self.conversation_history: List[Dict] = []
+        self.max_history = 50
+
+        if ORION_IMPORTED:
+            try:
+                self.memory = ObsidianMemoryBridge()
+                self.general = get_general(self.memory)
+                self.scraper = get_web_scraper()
+                self.ltm = get_long_term_memory()
+                print("[ORION] Brain inicializado com pacote orion/ completo")
+            except Exception as e:
+                print(f"[ORION] Erro ao inicializar pacote orion/: {e}")
+
+    def add_to_history(self, role: str, content: str):
+        self.conversation_history.append({
+            "role": role,
+            "content": content,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+        if len(self.conversation_history) > self.max_history:
+            self.conversation_history = self.conversation_history[-self.max_history:]
+
+    def get_context(self, max_messages: int = 10) -> str:
+        recent = self.conversation_history[-max_messages:] if len(self.conversation_history) > max_messages else self.conversation_history
+        lines = []
+        for msg in recent:
+            prefix = "Utilizador" if msg["role"] == "user" else "ORION"
+            lines.append(f"{prefix}: {msg['content'][:500]}")
+        return "\n".join(lines)
+
+    def save_to_github(self, role: str, content: str, source: str = "cloud"):
+        if not GITHUB_TOKEN:
+            return
+        try:
+            import base64
+            import hashlib
+
+            repo = "filipecosta8240-cyber/orion-general"
+            file_path = "data/conversations.json"
+            url = f"https://api.github.com/repos/{repo}/contents/{file_path}"
+
+            headers = {
+                "Authorization": f"token {GITHUB_TOKEN}",
+                "Accept": "application/vnd.github.v3+json",
+                "User-Agent": "ORION-Sync",
+            }
+
+            messages = []
+            sha = None
+            try:
+                req = urllib.request.Request(url, headers=headers)
+                with urllib.request.urlopen(req, context=SSL_CTX) as resp:
+                    result = json.loads(resp.read().decode())
+                    if "content" in result:
+                        messages = json.loads(base64.b64decode(result["content"]).decode())
+                        sha = result["sha"]
+            except Exception:
+                pass
+
+            messages.append({
+                "id": hashlib.md5(f"{content}{datetime.now()}".encode()).hexdigest()[:12],
+                "role": role,
+                "content": content,
+                "source": source,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            })
+
+            if len(messages) > 200:
+                messages = messages[-200:]
+
+            new_content = json.dumps(messages, ensure_ascii=False, indent=2)
+            data = {
+                "message": f"ORION Sync: {datetime.now(timezone.utc).strftime('%H:%M:%S')}",
+                "content": base64.b64encode(new_content.encode()).decode(),
+                "branch": "master",
+            }
+            if sha:
+                data["sha"] = sha
+
+            req = urllib.request.Request(
+                url, data=json.dumps(data).encode(), headers=headers, method="PUT"
+            )
+            urllib.request.urlopen(req, context=SSL_CTX)
+        except Exception as e:
+            print(f"[ORION] GitHub sync error: {e}")
+
+    def call_ai(self, prompt: str, system_prompt: str = "") -> Optional[str]:
+        global _last_ai_call
+        with _ai_call_lock:
+            elapsed = time.time() - _last_ai_call
+            wait = max(0, 3 - elapsed)
+            if wait > 0:
+                time.sleep(wait)
+            _last_ai_call = time.time()
+
+        # Prompt simples e direto (compativel com Pollinations)
+        if system_prompt:
+            full_prompt = f"{system_prompt}\nPergunta: {prompt}\nResposta:"
+        else:
+            full_prompt = prompt
+        full_prompt = full_prompt[:2000]
+
+        # 1. Pollinations AI (gratis, sem API key)
+        for attempt in range(3):
+            try:
+                prompt_encoded = urllib.parse.quote(full_prompt[:2000].encode("utf-8"))
+                url = "https://text.pollinations.ai/" + prompt_encoded
+                req = urllib.request.Request(url, headers={"User-Agent": "ORION/6.0"})
+                with urllib.request.urlopen(req, timeout=25, context=SSL_CTX) as resp:
+                    text = resp.read().decode("utf-8").strip()
+                    if text and len(text) > 5 and "429" not in text:
+                        return text
+            except Exception as e:
+                print(f"[ORION] Pollinations attempt {attempt+1}: {e}")
+                time.sleep(2)
+
+        # 2. Fallback: HuggingFace inference
+        try:
+            hf_prompt = prompt[:500]
+            hf_data = json.dumps({"inputs": hf_prompt}).encode()
+            req = urllib.request.Request(
+                "https://api-inference.huggingface.co/models/microsoft/DialoGPT-medium",
+                data=hf_data,
+                headers={"Content-Type": "application/json", "User-Agent": "ORION/6.0"},
+            )
+            with urllib.request.urlopen(req, timeout=20, context=SSL_CTX) as resp:
+                result = json.loads(resp.read().decode())
+                if isinstance(result, list) and len(result) > 0:
+                    text = result[0].get("generated_text", "")
+                    if text and text != hf_prompt:
+                        return text
+        except Exception as e:
+            print(f"[ORION] HuggingFace fallback: {e}")
+
+        return None
+
+    def web_search(self, query: str) -> Optional[str]:
+        if self.scraper:
+            try:
+                results = self.scraper.search(query, max_results=5)
+                if results:
+                    lines = []
+                    for r in results:
+                        lines.append(f"**{r.title}**")
+                        lines.append(f"Fonte: {r.source}")
+                        lines.append(f"{r.snippet}")
+                        lines.append("")
+                    return "\n".join(lines)
+            except Exception as e:
+                print(f"[ORION] Web search error: {e}")
+
+        # Fallback: Wikipedia
+        try:
+            url = "https://en.wikipedia.org/api/rest_v1/page/summary/" + urllib.parse.quote(query)
+            req = urllib.request.Request(url, headers={"User-Agent": "ORION/6.0"})
+            with urllib.request.urlopen(req, timeout=8, context=SSL_CTX) as resp:
+                data = json.loads(resp.read().decode())
+            title = data.get("title", query)
+            extract = data.get("extract", "")
+            if extract:
+                return f"**{title}**\n\n{extract[:2000]}"
+        except Exception:
+            pass
+
+        return None
+
+    def think(self, message: str) -> str:
+        msg_lower = message.lower().strip()
+        self.add_to_history("user", message)
+
+        # === DETECTA MODOS ESPECIAIS ===
+        if "[DEEP DIVE]" in message:
+            return self._mode_deep_dive(message)
+        if "[URGENTE]" in message:
+            return self._mode_urgent(message)
+        if "[ANALISAR]" in message:
+            return self._mode_analyze(message)
+        if "[COMPARAR]" in message:
+            return self._mode_compare(message)
+        if "[RISCOS]" in message:
+            return self._mode_risks(message)
+        if "[RESUMIR]" in message:
+            return self._mode_summary(message)
+        if "[PESQUISAR]" in message:
+            return self._mode_web_research(message)
+        if "[MEMORIA]" in message:
+            return self._mode_memory(message)
+
+        # === Tenta AI real primeiro (como Claude) ===
+        system = ("ORION General v6.0 - Assistente IA em portugues de Portugal. "
+                  "Responde de forma natural, util e direta. Usa markdown quando apropriado. "
+                  "Contexto: Microquinta avicola com 3 baias de galinhas em Portugal.")
+
+        ai_response = self.call_ai(message, system)
+        if ai_response and len(ai_response) > 10:
+            self.add_to_history("assistant", ai_response)
+            self.save_to_github("assistant", ai_response, "ai")
+            return ai_response
+
+        # === Tenta General Agent para analise local ===
+        if self.general:
+            try:
+                result = self.general.think(message)
+                if result and len(result) > 30 and "RECOMENDA" in result:
+                    self.add_to_history("assistant", result)
+                    self.save_to_github("assistant", result, "general")
+                    return result
+            except Exception as e:
+                print(f"[ORION] General agent error: {e}")
+
+        # === Fallback: web search ===
+        web = self.web_search(message)
+        if web:
+            result = f"**Pesquisa Web:** {message}\n\n{web}"
+            self.add_to_history("assistant", result)
+            self.save_to_github("assistant", result, "web")
+            return result
+
+        # === Fallback final ===
+        return self._fallback_response(message)
+
+    def _mode_deep_dive(self, message: str) -> str:
+        query = message.replace("[DEEP DIVE]", "").strip()
+        web_info = self.web_search(query)
+        ai = self.call_ai(f"Faz uma auditoria DEEP DIVE completa sobre: {query}", "ORION General v6 - Modo DEEP DIVE. Analise exaustiva.")
+        parts = [f"🎖️ **DEEP DIVE AUDITORIA**\n\n**Tópico:** {query}\n"]
+        if ai:
+            parts.append(ai)
+        if web_info and not ai:
+            parts.append(f"**Dados Web:**\n{web_info[:2000]}")
+        elif web_info:
+            parts.append(f"\n\n**Fontes Adicionais:**\n{web_info[:1000]}")
+        result = "\n".join(parts)
+        self.add_to_history("assistant", result)
+        self.save_to_github("assistant", result, "deep_dive")
+        return result
+
+    def _mode_urgent(self, message: str) -> str:
+        query = message.replace("[URGENTE]", "").strip()
+        ai = self.call_ai(f"[URGENTE] {query}", "ORION General v6 - Modo URGENTE. Resposta rapida e direta.")
+        if not ai:
+            web = self.web_search(query)
+            ai = web or f"Sem dados especificos sobre '{query}'."
+        result = f"🚨 **MODO URGENTE**\n\n**{query}**\n\n{ai}"
+        self.add_to_history("assistant", result)
+        return result
+
+    def _mode_analyze(self, message: str) -> str:
+        query = message.replace("[ANALISAR]", "").strip()
+        web = self.web_search(query)
+        ai = self.call_ai(f"Analisa detalhadamente: {query}", "ORION General v6 - Modo ANALISE. Detalhado e estruturado.")
+        parts = [f"📊 **ANÁLISE DETALHADA**\n\n**Tópico:** {query}\n"]
+        if ai:
+            parts.append(ai)
+        elif web:
+            parts.append(web[:2000])
+        else:
+            parts.append(f"Sem dados suficientes sobre '{query}'.")
+        result = "\n".join(parts)
+        self.add_to_history("assistant", result)
+        return result
+
+    def _mode_compare(self, message: str) -> str:
+        query = message.replace("[COMPARAR]", "").strip()
+        ai = self.call_ai(f"Compara as opcoes: {query}", "ORION General v6 - Modo COMPARACAO. Tabela comparativa.")
+        if not ai:
+            web = self.web_search(query)
+            ai = web or f"Sem dados para comparar sobre '{query}'."
+        result = f"⚖️ **COMPARAÇÃO**\n\n**{query}**\n\n{ai}"
+        self.add_to_history("assistant", result)
+        return result
+
+    def _mode_risks(self, message: str) -> str:
+        query = message.replace("[RISCOS]", "").strip()
+        ai = self.call_ai(f"Analisa os riscos de: {query}", "ORION General v6 - Modo RISCOS. Foco em ameacas e mitigacao.")
+        if not ai:
+            web = self.web_search(query)
+            ai = web or f"Sem dados para analisar riscos sobre '{query}'."
+        result = f"⚠️ **ANÁLISE DE RISCOS**\n\n**{query}**\n\n{ai}"
+        self.add_to_history("assistant", result)
+        return result
+
+    def _mode_summary(self, message: str) -> str:
+        query = message.replace("[RESUMIR]", "").strip()
+        ai = self.call_ai(f"Faz um resumo executivo sobre: {query}", "ORION General v6 - Modo RESUMO. Conciso e direto ao ponto.")
+        if not ai:
+            web = self.web_search(query)
+            ai = web or f"Sem dados para resumir sobre '{query}'."
+        result = f"📋 **RESUMO EXECUTIVO**\n\n**{query}**\n\n{ai}"
+        self.add_to_history("assistant", result)
+        return result
+
+    def _mode_web_research(self, message: str) -> str:
+        query = message.replace("[PESQUISAR]", "").strip()
+        web = self.web_search(query)
+        if web:
+            result = f"🔍 **PESQUISA WEB**\n\n**Tópico:** {query}\n\n{web}"
+        else:
+            ai = self.call_ai(f"Pesquisa sobre: {query}", "ORION General v6 - Pesquisa web.")
+            result = f"🔍 **PESQUISA**\n\n**{query}**\n\n{ai or 'Sem resultados.'}"
+        self.add_to_history("assistant", result)
+        return result
+
+    def _mode_memory(self, message: str) -> str:
+        query = message.replace("[MEMORIA]", "").strip()
+        memories = []
+        if self.ltm:
+            try:
+                memories = self.ltm.retrieve(query, limit=5)
+            except Exception:
+                pass
+
+        if not memories:
+            context_lines = self.conversation_history[-6:-1] if len(self.conversation_history) > 1 else []
+            parts = [f"🧠 **MEMÓRIA**\n\n**Consulta:** {query}\n"]
+            if context_lines:
+                parts.append("**Contexto recente:**")
+                for m in context_lines[-3:]:
+                    role = "Tu" if m["role"] == "user" else "ORION"
+                    parts.append(f"- {role}: {m['content'][:100]}...")
+            else:
+                parts.append("Nenhuma memória encontrada.")
+            result = "\n".join(parts)
+        else:
+            parts = [f"🧠 **MEMÓRIA DE LONGO PRAZO**\n\n**Consulta:** {query}\n"]
+            for i, m in enumerate(memories[:5], 1):
+                parts.append(f"{i}. **[{m.memory_type}]** {m.content[:200]}...")
+            result = "\n".join(parts)
+
+        self.add_to_history("assistant", result)
+        return result
+
+    def _fallback_response(self, message: str) -> str:
+        ctx = ("Microquinta avicola em Portugal. "
+               "Plantel: 3 baias - RIR (1M 7F), JG (1M 3F + 12 pintos 6sem), Araucana (1M 1F). "
+               "Producao: ~10 ovos/dia. Preco: 2.50EUR/dozinha.")
+
+        if any(w in message.lower() for w in ["doenca", "doente", "problema", "machuc", "ferid"]):
+            return (f"**Diagnóstico de Saúde**\n\n{ctx}\n\n"
+                    "Recomendações:\n"
+                    "1. Monitorizar comportamento diariamente\n"
+                    "2. Verificar penas, olhos, mobilidade\n"
+                    "3. Manter agua limpa sempre disponivel\n"
+                    "4. Ventilacao adequada")
+
+        if any(w in message.lower() for w in ["ovo", "ovos", "bota", "postura"]):
+            return (f"**Produção de Ovos**\n\n{ctx}\n\n"
+                    "RIR: 6/dia | JG: 3/dia | Araucana: 1/dia (irregular)\n"
+                    "Total: ~10 ovos/dia\n"
+                    "Preco: 2.50EUR/doz (normais) | 6.00EUR/doz (azuis)")
+
+        if any(w in message.lower() for w in ["racao", "comida", "alimenta"]):
+            return (f"**Alimentação**\n\n{ctx}\n\n"
+                    "- Racao poedeiras\n"
+                    "- Agua limpa sempre disponivel\n"
+                    "- Calcio para casca\n"
+                    "- Trato: milho, restos")
+
+        if any(w in message.lower() for w in ["galinha", "galinhas", "pinto", "pintos"]):
+            return (f"**Plantel**\n\n{ctx}\n\n"
+                    "Baia 1 (RIR): 1M + 7F\n"
+                    "Baia 2 (JG): 1M + 3F + 12 pintos\n"
+                    "Baia 3 (Araucana): 1M Bigodao + 1F Pompom")
+
+        return (f"Nao consegui processar: '{message}'\n\n"
+                "Tenta usar um modo especifico:\n"
+                "- [DEEP DIVE] para analise profunda\n"
+                "- [PESQUISAR] para pesquisa web\n"
+                "- [RESUMIR] para resumo\n"
+                "- Ou reformula a pergunta.")
+
+
+# =====================================================
+# FASTAPI APP (se disponivel)
+# =====================================================
+
+if FASTAPI_AVAILABLE:
+    brain = OrionBrain()
+    WEB_ROOT = PROJECT_ROOT / "ORION_SYSTEM" / "web_ui"
+
+    class ChatRequest(BaseModel):
+        message: str
+
+    class ChatResponse(BaseModel):
+        response: str
+        mode: str = "general"
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        print(f"[ORION] Server v6.0 starting on port {PORT}")
+        print(f"[ORION] Web UI: {WEB_ROOT}")
+        print(f"[ORION] orion/ package: {'IMPORTED' if ORION_IMPORTED else 'NOT AVAILABLE'}")
+        yield
+        print("[ORION] Server shutting down")
+
+    app = FastAPI(title="ORION General v6.0", lifespan=lifespan)
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    if WEB_ROOT.exists():
+        app.mount("/static", StaticFiles(directory=str(WEB_ROOT)), name="static")
+
+    @app.get("/api/health")
+    async def health():
+        return {
+            "status": "healthy",
+            "version": "6.0",
+            "orion_package": ORION_IMPORTED,
+            "conversations": len(brain.conversation_history),
+            "uptime": time.time(),
+        }
+
+    @app.post("/api/chat")
+    async def chat(req: ChatRequest):
+        if not req.message.strip():
+            return ChatResponse(response="Por favor, escreve uma mensagem.")
+
+        response_text = brain.think(req.message)
+        return ChatResponse(response=response_text)
+
+    @app.post("/api/chat/stream")
+    async def chat_stream(req: ChatRequest):
+        if not req.message.strip():
+            return JSONResponse({"error": "Mensagem vazia"})
+
+        async def generate():
+            response_text = brain.think(req.message)
+            words = response_text.split(" ")
+            for i, word in enumerate(words):
+                yield f"data: {word} "
+                if i % 3 == 0:
+                    yield "\n\n"
+                import asyncio
+                await asyncio.sleep(0.02)
+            yield "data: [DONE]\n\n"
+
+        return StreamingResponse(generate(), media_type="text/event-stream")
+
+    @app.get("/api/memory")
+    async def get_memory(q: str = "", limit: int = 10):
+        if brain.ltm and q:
+            results = brain.ltm.retrieve(q, limit=limit)
+            return {"memories": [{"type": m.memory_type, "content": m.content[:300], "category": m.category} for m in results]}
+        return {"memories": [], "total_conversations": len(brain.conversation_history)}
+
+    @app.post("/api/web/search")
+    async def web_search_endpoint(req: ChatRequest):
+        result = brain.web_search(req.message)
+        return {"query": req.message, "results": result or "Sem resultados"}
+
+    @app.get("/api/conversation/history")
+    async def conversation_history(limit: int = 20):
+        recent = brain.conversation_history[-limit:] if brain.conversation_history else []
+        return {"history": recent}
+
+    @app.post("/api/conversation/clear")
+    async def clear_conversation():
+        brain.conversation_history = []
+        return {"status": "cleared"}
+
+    @app.get("/{full_path:path}")
+    async def serve_frontend(full_path: str):
+        if not full_path or full_path == "/":
+            full_path = "index.html"
+
+        static_file = WEB_ROOT / full_path
+        if static_file.exists() and static_file.is_file():
+            return FileResponse(str(static_file))
+
+        # Fallback para index.html (SPA)
+        index = WEB_ROOT / "index.html"
+        if index.exists():
+            return FileResponse(str(index))
+
+        return JSONResponse({"error": "Not found", "path": full_path}, status_code=404)
+
+    def main():
+        uvicorn.run(app, host="0.0.0.0", port=PORT, log_level="info")
+
+else:
+    # =====================================================
+    # FALLBACK: http.server (sem FastAPI)
+    # =====================================================
+
+    from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
+
+    brain = OrionBrain()
+
+    HTML_PAGE = """<!DOCTYPE html>
 <html lang="pt">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="theme-color" content="#1a1a2e">
-    <title>ORION General Agent</title>
+    <title>ORION General v6.0</title>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-            color: #fff; min-height: 100vh; display: flex; flex-direction: column;
+            background: #1a1a2e; color: #e0e0e0;
+            min-height: 100vh; display: flex; flex-direction: column;
         }
-        .header { background: rgba(0,0,0,0.3); padding: 15px; text-align: center; border-bottom: 1px solid rgba(255,255,255,0.1); }
-        .header h1 { font-size: 1.2rem; color: #4ade80; }
-        .header .status { font-size: 0.8rem; color: #888; margin-top: 5px; }
-        .chat-container { flex: 1; overflow-y: auto; padding: 15px; display: flex; flex-direction: column; gap: 10px; }
-        .message { max-width: 85%; padding: 12px 16px; border-radius: 18px; line-height: 1.4; font-size: 0.95rem; animation: fadeIn 0.3s ease; }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-        .message.user { align-self: flex-end; background: #4ade80; color: #000; border-bottom-right-radius: 4px; }
-        .message.bot { align-self: flex-start; background: rgba(255,255,255,0.1); border-bottom-left-radius: 4px; }
-        .message.bot.loading { color: #888; }
-        .input-container { padding: 15px; background: rgba(0,0,0,0.3); border-top: 1px solid rgba(255,255,255,0.1); display: flex; gap: 10px; }
-        .input-container input { flex: 1; padding: 12px 16px; border: none; border-radius: 24px; background: rgba(255,255,255,0.1); color: #fff; font-size: 1rem; outline: none; }
-        .input-container input::placeholder { color: #666; }
-        .input-container button { padding: 12px 20px; border: none; border-radius: 24px; background: #4ade80; color: #000; font-weight: bold; cursor: pointer; }
+        .header {
+            background: rgba(0,0,0,0.3); padding: 12px 20px;
+            display: flex; align-items: center; justify-content: space-between;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+        }
+        .header h1 { font-size: 1rem; color: #4ade80; }
+        .header .status { font-size: 0.75rem; padding: 4px 10px; border-radius: 12px; }
+        .status.online { background: rgba(74,222,128,0.2); color: #4ade80; }
+        .status.offline { background: rgba(248,113,113,0.2); color: #f87171; }
+        .chat-container {
+            flex: 1; overflow-y: auto; padding: 15px 20px;
+            display: flex; flex-direction: column; gap: 12px;
+        }
+        .message {
+            max-width: 88%; padding: 12px 16px; border-radius: 12px;
+            line-height: 1.5; font-size: 0.9rem;
+            animation: fadeIn 0.3s ease;
+        }
+        .message p { margin: 4px 0; }
+        .message pre { background: #0d1117; padding: 12px; border-radius: 8px; overflow-x: auto; margin: 8px 0; }
+        .message code { font-size: 0.85rem; }
+        .message pre code { background: none; padding: 0; }
+        .message ul, .message ol { padding-left: 20px; margin: 4px 0; }
+        .message a { color: #4ade80; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+        .message.user {
+            align-self: flex-end; background: #4ade80; color: #000;
+            border-bottom-right-radius: 4px;
+        }
+        .message.user code { background: rgba(0,0,0,0.1); color: #000; }
+        .message.user a { color: #1a1a2e; }
+        .message.bot {
+            align-self: flex-start; background: rgba(255,255,255,0.08);
+            border-bottom-left-radius: 4px;
+        }
+        .message.bot.loading { color: #888; font-style: italic; }
+        .input-container {
+            padding: 12px 20px; background: rgba(0,0,0,0.3);
+            border-top: 1px solid rgba(255,255,255,0.1);
+            display: flex; gap: 8px; align-items: center;
+        }
+        .input-container input {
+            flex: 1; padding: 10px 16px; border: 1px solid rgba(255,255,255,0.15);
+            border-radius: 20px; background: rgba(255,255,255,0.06);
+            color: #fff; font-size: 0.9rem; outline: none;
+        }
+        .input-container input:focus { border-color: #4ade80; }
+        .input-container button {
+            padding: 10px 20px; border: none; border-radius: 20px;
+            background: #4ade80; color: #000; font-weight: 600; cursor: pointer;
+        }
         .input-container button:active { transform: scale(0.95); }
-        .quick-actions { display: flex; gap: 8px; padding: 10px 15px; overflow-x: auto; }
-        .quick-actions button { flex-shrink: 0; padding: 8px 14px; border: 1px solid rgba(255,255,255,0.2); border-radius: 16px; background: transparent; color: #4ade80; font-size: 0.8rem; cursor: pointer; }
+        .quick-actions {
+            display: flex; gap: 6px; padding: 8px 20px;
+            overflow-x: auto; flex-wrap: wrap;
+        }
+        .quick-actions button {
+            flex-shrink: 0; padding: 6px 12px; border: 1px solid rgba(255,255,255,0.15);
+            border-radius: 14px; background: transparent; color: #4ade80;
+            font-size: 0.75rem; cursor: pointer;
+        }
+        .quick-actions button:hover { background: rgba(74,222,128,0.1); }
+        .typing-indicator {
+            align-self: flex-start; background: rgba(255,255,255,0.08);
+            padding: 12px 20px; border-radius: 12px;
+            border-bottom-left-radius: 4px;
+        }
+        .typing-indicator span {
+            display: inline-block; width: 8px; height: 8px;
+            border-radius: 50%; background: #4ade80;
+            margin: 0 2px; animation: typing 1.4s infinite;
+        }
+        .typing-indicator span:nth-child(2) { animation-delay: 0.2s; }
+        .typing-indicator span:nth-child(3) { animation-delay: 0.4s; }
+        @keyframes typing {
+            0%, 60%, 100% { opacity: 0.3; transform: translateY(0); }
+            30% { opacity: 1; transform: translateY(-4px); }
+        }
+        .file-upload {
+            padding: 8px; border: 1px dashed rgba(255,255,255,0.2);
+            border-radius: 12px; cursor: pointer; color: #888;
+            font-size: 0.8rem; text-align: center;
+        }
+        .file-upload:hover { border-color: #4ade80; color: #4ade80; }
+        @media (max-width: 600px) {
+            .message { max-width: 95%; font-size: 0.85rem; }
+            .quick-actions button { font-size: 0.7rem; padding: 5px 10px; }
+        }
     </style>
 </head>
 <body>
     <div class="header">
-        <h1>ORION GENERAL v5.0</h1>
-        <div class="status" id="status">A conectar...</div>
+        <h1>ORION GENERAL v6.0</h1>
+        <span class="status offline" id="status">Desconectado</span>
     </div>
     <div class="chat-container" id="chat">
         <div class="message bot">
-            General operacional. Versao 5.0.<br><br>
-            Modos: [DEEP DIVE] [URGENTE] [ANALISAR] [COMPARAR] [RISCOS] [RESUMIR] [PESQUISAR] [MEMORIA]
+            <p>General operacional. <strong>Versao 6.0</strong></p>
+            <p>Modos disponiveis:</p>
+            <ul>
+                <li><code>[DEEP DIVE]</code> Auditoria completa</li>
+                <li><code>[URGENTE]</code> Resposta rapida</li>
+                <li><code>[ANALISAR]</code> Analise detalhada</li>
+                <li><code>[COMPARAR]</code> Comparacao</li>
+                <li><code>[RISCOS]</code> Analise de riscos</li>
+                <li><code>[RESUMIR]</code> Resumo executivo</li>
+                <li><code>[PESQUISAR]</code> Pesquisa web</li>
+                <li><code>[MEMORIA]</code> Memoria</li>
+            </ul>
         </div>
     </div>
     <div class="quick-actions">
         <button onclick="sendQuick('[DEEP DIVE] ')">DEEP DIVE</button>
         <button onclick="sendQuick('[URGENTE] ')">URGENTE</button>
         <button onclick="sendQuick('[ANALISAR] ')">ANALISAR</button>
+        <button onclick="sendQuick('[COMPARAR] ')">COMPARAR</button>
+        <button onclick="sendQuick('[RISCOS] ')">RISCOS</button>
         <button onclick="sendQuick('[RESUMIR] ')">RESUMIR</button>
+        <button onclick="sendQuick('[PESQUISAR] ')">PESQUISAR</button>
         <button onclick="sendQuick('[MEMORIA] ')">MEMORIA</button>
     </div>
     <div class="input-container">
-        <input type="text" id="userInput" placeholder="Escreva..." autocomplete="off">
+        <label class="file-upload" title="Anexar ficheiro" id="fileLabel">📎</label>
+        <input type="file" id="fileInput" style="display:none" accept=".txt,.py,.js,.html,.css,.json,.md,.csv">
+        <input type="text" id="userInput" placeholder="Escreve a tua mensagem..." autocomplete="off">
         <button onclick="sendMessage()">Enviar</button>
     </div>
     <script>
         const chat = document.getElementById('chat');
         const input = document.getElementById('userInput');
         const status = document.getElementById('status');
+        const fileInput = document.getElementById('fileInput');
+        const fileLabel = document.getElementById('fileLabel');
+        let fileContent = null;
+        let fileName = null;
+
+        // Markdown config
+        marked.setOptions({
+            breaks: true,
+            gfm: true,
+            highlight: function(code, lang) {
+                if (lang && hljs.getLanguage(lang)) {
+                    try { return hljs.highlight(code, {language: lang}).value; } catch(e) {}
+                }
+                return hljs.highlightAuto(code).value;
+            }
+        });
+
+        fileLabel.addEventListener('click', () => fileInput.click());
+        fileInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            fileName = file.name;
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+                fileContent = ev.target.result;
+                fileLabel.textContent = `📄 ${fileName}`;
+            };
+            reader.readAsText(file);
+        });
 
         async function checkConnection() {
             try {
                 const res = await fetch('/api/health');
-                if (res.ok) { status.textContent = 'Online'; status.style.color = '#4ade80'; }
-                else { status.textContent = 'Erro'; status.style.color = '#f87171'; }
-            } catch (e) { status.textContent = 'Offline'; status.style.color = '#f87171'; }
+                if (res.ok) {
+                    status.textContent = 'Online';
+                    status.className = 'status online';
+                } else {
+                    status.textContent = 'Erro';
+                    status.className = 'status offline';
+                }
+            } catch(e) {
+                status.textContent = 'Offline';
+                status.className = 'status offline';
+            }
         }
 
         function addMessage(text, isUser = false) {
             const div = document.createElement('div');
             div.className = 'message ' + (isUser ? 'user' : 'bot');
-            div.innerHTML = text;
+            if (isUser) {
+                div.textContent = text;
+            } else {
+                div.innerHTML = marked.parse(text);
+                div.querySelectorAll('pre code').forEach((block) => {
+                    hljs.highlightElement(block);
+                });
+            }
             chat.appendChild(div);
             chat.scrollTop = chat.scrollHeight;
+            return div;
         }
 
-        function addLoading() {
+        function addTyping() {
             const div = document.createElement('div');
-            div.className = 'message bot loading';
-            div.id = 'loading';
-            div.textContent = 'A processar...';
+            div.className = 'typing-indicator';
+            div.id = 'typing';
+            div.innerHTML = '<span></span><span></span><span></span>';
             chat.appendChild(div);
             chat.scrollTop = chat.scrollHeight;
         }
 
-        function removeLoading() {
-            const loading = document.getElementById('loading');
-            if (loading) loading.remove();
+        function removeTyping() {
+            const el = document.getElementById('typing');
+            if (el) el.remove();
         }
 
-        function sendQuick(text) { input.value = text; sendMessage(); }
+        function sendQuick(text) {
+            input.value = text;
+            sendMessage();
+        }
 
         async function sendMessage() {
-            const text = input.value.trim();
-            if (!text) return;
+            let text = input.value.trim();
+            if (!text && !fileContent) return;
+
+            if (fileContent) {
+                text = `[Ficheiro: ${fileName}]\n` + "```" + `\n${fileContent.slice(0, 3000)}\n` + "```" + `\n\n${text || 'Analisa este ficheiro.'}`;
+                fileContent = null;
+                fileName = null;
+                fileLabel.textContent = '📎';
+                fileInput.value = '';
+            }
+
             addMessage(text, true);
             input.value = '';
-            addLoading();
+            addTyping();
+
             try {
                 const res = await fetch('/api/chat', {
                     method: 'POST',
@@ -130,404 +815,147 @@ HTML_PAGE = """<!DOCTYPE html>
                     body: JSON.stringify({ message: text })
                 });
                 const data = await res.json();
-                removeLoading();
+                removeTyping();
                 addMessage(data.response || 'Sem resposta');
-            } catch (e) {
-                removeLoading();
-                addMessage('Erro de conexao.');
+            } catch(e) {
+                removeTyping();
+                addMessage('Erro de conexao com o servidor.');
             }
         }
 
-        input.addEventListener('keypress', (e) => { if (e.key === 'Enter') sendMessage(); });
+        input.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
+            }
+        });
+
+        // Ctrl+K to focus input
+        document.addEventListener('keydown', (e) => {
+            if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+                e.preventDefault();
+                input.focus();
+            }
+        });
+
         checkConnection();
+        setInterval(checkConnection, 30000);
     </script>
 </body>
 </html>"""
 
+    class ORIONHandler(BaseHTTPRequestHandler):
+        def log_message(self, format, *args):
+            print(f"[ORION] {format % args}")
 
-class ORIONHandler(BaseHTTPRequestHandler):
-    def log_message(self, format, *args):
-        print(f"[ORION] {format % args}")
+        def do_GET(self):
+            if self.path == "/api/health":
+                self.send_json({
+                    "status": "healthy",
+                    "version": "6.0",
+                    "orion_package": ORION_IMPORTED,
+                })
+            elif self.path in ("/", "/index.html"):
+                content = HTML_PAGE.encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", len(content))
+                self.end_headers()
+                self.wfile.write(content)
+            else:
+                # Tenta servir ficheiros estáticos
+                static_path = WEB_ROOT / self.path.lstrip("/")
+                if static_path.exists() and static_path.is_file():
+                    content = static_path.read_bytes()
+                    ctype = "application/octet-stream"
+                    if self.path.endswith(".html"):
+                        ctype = "text/html; charset=utf-8"
+                    elif self.path.endswith(".css"):
+                        ctype = "text/css"
+                    elif self.path.endswith(".js"):
+                        ctype = "application/javascript"
+                    elif self.path.endswith(".json"):
+                        ctype = "application/json"
+                    elif self.path.endswith(".png"):
+                        ctype = "image/png"
+                    elif self.path.endswith(".svg"):
+                        ctype = "image/svg+xml"
+                    self.send_response(200)
+                    self.send_header("Content-Type", ctype)
+                    self.send_header("Content-Length", len(content))
+                    self.end_headers()
+                    self.wfile.write(content)
+                else:
+                    self.send_error(404)
 
-    def do_GET(self):
-        if self.path == '/api/health':
-            self.send_json({"status": "healthy", "version": "5.0"})
-        elif self.path == '/' or self.path == '/index.html':
-            content = HTML_PAGE.encode('utf-8')
+        def do_POST(self):
+            if self.path == "/api/chat":
+                length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(length)
+                try:
+                    data = json.loads(body)
+                    message = data.get("message", "")
+                    brain.save_to_github("user", message, "cloud")
+                    response = brain.think(message)
+                    brain.save_to_github("assistant", response, "cloud")
+                    self.send_json({"response": response})
+                except Exception as e:
+                    self.send_json({"response": f"Erro: {str(e)}"})
+            elif self.path == "/api/web/search":
+                length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(length)
+                try:
+                    data = json.loads(body)
+                    results = brain.web_search(data.get("message", ""))
+                    self.send_json({"query": data.get("message", ""), "results": results or "Sem resultados"})
+                except Exception as e:
+                    self.send_json({"error": str(e)})
+            elif self.path == "/api/conversation/history":
+                limit = int(self.headers.get("X-Limit", 20))
+                recent = brain.conversation_history[-limit:] if brain.conversation_history else []
+                self.send_json({"history": recent})
+            elif self.path == "/api/conversation/clear":
+                brain.conversation_history = []
+                self.send_json({"status": "cleared"})
+            elif self.path == "/api/memory":
+                length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(length)
+                try:
+                    data = json.loads(body)
+                    q = data.get("query", "")
+                    if brain.ltm and q:
+                        results = brain.ltm.retrieve(q, limit=10)
+                        self.send_json({"memories": [{"type": m.memory_type, "content": m.content[:300]} for m in results]})
+                    else:
+                        self.send_json({"memories": []})
+                except Exception:
+                    self.send_json({"memories": [], "total": len(brain.conversation_history)})
+            else:
+                self.send_error(404)
+
+        def do_OPTIONS(self):
             self.send_response(200)
-            self.send_header('Content-Type', 'text/html; charset=utf-8')
-            self.send_header('Content-Length', len(content))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type, X-Limit")
             self.end_headers()
-            self.wfile.write(content)
-        else:
-            self.send_error(404)
 
-    def do_POST(self):
-        if self.path == '/api/chat':
-            length = int(self.headers.get('Content-Length', 0))
-            body = self.rfile.read(length)
-            try:
-                data = json.loads(body)
-                message = data.get('message', '')
-                
-                # Guarda no GitHub
-                self.save_to_github("user", message, "cloud")
-                
-                response = self.call_general(message)
-                
-                # Guarda resposta no GitHub
-                self.save_to_github("assistant", response, "cloud")
-                
-                self.send_json({"response": response})
-            except Exception as e:
-                self.send_json({"response": f"Erro: {str(e)}"})
-        elif self.path == '/api/messages':
-            messages = self.load_from_github()
-            self.send_json({"messages": messages})
-        else:
-            self.send_error(404)
-    
-    def save_to_github(self, role, content, source):
-        """Guarda mensagem no GitHub"""
-        try:
-            import base64
-            import hashlib
-            from datetime import datetime, timezone
-            
-            repo = "filipecosta8240-cyber/orion-general"
-            file_path = "data/conversations.json"
-            url = f"https://api.github.com/repos/{repo}/contents/{file_path}"
-            
-            headers = {
-                "Authorization": f"token {GITHUB_TOKEN}",
-                "Accept": "application/vnd.github.v3+json",
-                "User-Agent": "ORION-Sync",
-            }
-            
-            # Obtém mensagens existentes
-            messages = []
-            sha = None
-            try:
-                req = urllib.request.Request(url, headers=headers)
-                with urllib.request.urlopen(req, context=SSL_CTX) as response:
-                    result = json.loads(response.read().decode())
-                    if "content" in result:
-                        content_b64 = result["content"]
-                        messages = json.loads(base64.b64decode(content_b64).decode())
-                        sha = result["sha"]
-            except:
-                pass
-            
-            # Adiciona nova mensagem
-            message = {
-                "id": hashlib.md5(f"{content}{datetime.now()}".encode()).hexdigest()[:12],
-                "role": role,
-                "content": content,
-                "source": source,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            }
-            messages.append(message)
-            
-            # Limita a 200
-            if len(messages) > 200:
-                messages = messages[-200:]
-            
-            # Guarda no GitHub
-            new_content = json.dumps(messages, ensure_ascii=False, indent=2)
-            content_b64 = base64.b64encode(new_content.encode()).decode()
-            
-            data = {
-                "message": f"ORION Sync: {datetime.now(timezone.utc).strftime('%H:%M:%S')}",
-                "content": content_b64,
-                "branch": "master",
-            }
-            if sha:
-                data["sha"] = sha
-            
-            req = urllib.request.Request(
-                url,
-                data=json.dumps(data).encode(),
-                headers=headers,
-                method="PUT"
-            )
-            urllib.request.urlopen(req, context=SSL_CTX)
-        except Exception as e:
-            print(f"Sync error: {e}")
-    
-    def load_from_github(self):
-        """Carrega mensagens do GitHub"""
-        try:
-            import base64
-            
-            repo = "filipecosta8240-cyber/orion-general"
-            file_path = "data/conversations.json"
-            url = f"https://api.github.com/repos/{repo}/contents/{file_path}"
-            
-            headers = {
-                "Authorization": f"token {GITHUB_TOKEN}",
-                "Accept": "application/vnd.github.v3+json",
-                "User-Agent": "ORION-Sync",
-            }
-            
-            req = urllib.request.Request(url, headers=headers)
-            with urllib.request.urlopen(req, context=SSL_CTX) as response:
-                result = json.loads(response.read().decode())
-                if "content" in result:
-                    content_b64 = result["content"]
-                    return json.loads(base64.b64decode(content_b64).decode())
-        except:
-            pass
-        return []
+        def send_json(self, data):
+            response = json.dumps(data, ensure_ascii=False).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", len(response))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(response)
 
-    def call_general(self, message):
-        msg = message.lower().strip()
-        ctx = ("CONTEXTO: Microquinta avicola em Portugal. "
-               "Plantel: 3 baias - RIR (1M 7F), JG (1M 3F + 12 pintos 6sem ~3 hibridos), Araucana (1M 1F). "
-               "Producao: ~10 ovos/dia. Preco: 2.50EUR/dozinha.")
-
-        KW = {
-            "deep dive": (f"[DEEP DIVE] Auditoria completa\n\n{ctx}\n\n"
-                          f"Analise do pedido: {message}\n\n"
-                          "RECOMENDACOES:\n"
-                          "1. Manter rotina fixa nas 3 baias\n"
-                          "2. Aguardar eclosao 4 Julho (7 ovos)\n"
-                          "3. Separar hibridos quando necessario\n"
-                          "4. Monitorizar postura Araucana\n\nCONFIANCA: 85%"),
-            "memoria": (f"[MEMORIA] Sistema de memoria\n\n{ctx}\n\n"
-                        "ESTATISTICAS:\n"
-                        "- Total memorias: 29\n"
-                        "- Plantel: 14 aves adultas + 12 pintos\n"
-                        "- Incubacao: 7 ovos, eclosao 4 Julho\n"
-                        "- Receita: ~62.50EUR/mes\n"
-                        "- Custo: ~110-145EUR/mes\n"
-                        "- Saldo: -50 a -80EUR/mes"),
-            "urgente": f"[URGENTE] Diagnostico rapido\n\nSITUACAO: {message}\n\nACAO recomendada.",
-            "comparar": f"[COMPARAR] Ovos normais: 2.50EUR/doz. Azuis: 6.00EUR/doz. RECOMENDACAO: Azuis!",
-            "riscos": f"[RISCOS] Calor=BAIXO, Postura irregular=MEDIO, Custo>Receita=ALTO.",
-            "resumir": f"[RESUMIR] Producao: 10 ovos/dia = 62.50EUR/mes. Custo: 110-145EUR/mes. Saldo: negativo.",
-            "pesquisar": f"[PESQUISAR] Mercado Portugal estavel. Ovos artesanais em crescimento.",
-            "analise": f"[ANALISE] Analise detalhada de: {message}",
-            "analisar": f"[ANALISE] Analise detalhada de: {message}",
-        }
-        for key, resp in KW.items():
-            if key in msg:
-                return resp
-
-        POULTRY = ["ovo", "ovos", "galinha", "galinhas", "ave", "aves", "pinto", "pintos",
-                   "galo", "macho", "femea", "doente", "doenca", "incub", "eclosao",
-                   "baia", "baias", "racao", "alimentacao", "postura", "botar",
-                   "dinheiro", "ganho", "lucro", "receita", "custo", "preco", "vend"]
-
-        APP = ["app", "programacao", "codigo", "code", "coding", "desenvolver", "desenvolvimento",
-               "software", "android", "ios", "mobile", "website", "api", "backend", "frontend",
-               "python", "javascript", "html", "css", "flask", "react", "database", "base de dados",
-               "deploy", "servidor", "server", "cloud", "github", "git", "railway", "vercel"]
-
-        if any(w in msg for w in APP):
-            return self._app_response(message, msg)
-
-        if any(w in msg for w in POULTRY):
-            try:
-                sys.path.insert(0, str(PROJECT_ROOT))
-                from orion.agents import get_general
-                result = get_general().think(f"{ctx}\nPergunta: {message}")
-                if result and "0 fontes" not in result:
-                    return result
-            except Exception:
-                pass
-            return self._poultry_response(message, msg, ctx)
-
-        ai = self._ai_chat(message)
-        if ai:
-            return ai
-
-        return self._web_search(message)
-
-    def _ai_chat(self, message):
-        try:
-            prompt = (
-                "Tu és o ORION, um assistente IA inteligente e amigável. "
-                "Responde em português de Portugal. "
-                "Contexto: O utilizador tem uma microquinta avicola em Portugal com "
-                "3 baias de galinhas (RIR, JG, Araucana), 10 ovos/dia, 2.50EUR/dozinha. "
-                "Se a pergunta for sobre a microquinta, usa o contexto. "
-                "Se for sobre outro assunto, responde normalmente de forma completa.\n\n"
-                f"Pergunta: {message}"
-            )
-            url = "https://text.pollinations.ai/" + urllib.parse.quote(prompt)
-            req = urllib.request.Request(url, headers={"User-Agent": "ORION/5.0"})
-            with urllib.request.urlopen(req, timeout=30, context=SSL_CTX) as resp:
-                return resp.read().decode("utf-8").strip()
-        except Exception:
-            return None
-
-    def _web_search(self, message):
-        try:
-            url = "https://en.wikipedia.org/api/rest_v1/page/summary/" + urllib.parse.quote(message)
-            req = urllib.request.Request(url, headers={"User-Agent": "ORION/5.0"})
-            with urllib.request.urlopen(req, timeout=8, context=SSL_CTX) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-            title = data.get("title", message)
-            extract = data.get("extract", "")
-            if extract:
-                return f"**{title}**\n\n{extract}"
-        except Exception:
-            pass
-        try:
-            url2 = "https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=" + urllib.parse.quote(message) + "&format=json&srlimit=3"
-            req2 = urllib.request.Request(url2, headers={"User-Agent": "ORION/5.0"})
-            with urllib.request.urlopen(req2, timeout=8, context=SSL_CTX) as resp2:
-                data2 = json.loads(resp2.read().decode("utf-8"))
-            results = data2.get("query", {}).get("search", [])
-            if results:
-                lines = []
-                for r in results:
-                    t = r["title"]
-                    s = re.sub(r'<[^>]+>', '', r["snippet"])[:150]
-                    lines.append(f"**{t}**\n{s}")
-                return f"Resultados: {message}\n\n" + "\n\n".join(lines)
-        except Exception:
-            pass
-        return (f"Nao encontrei sobre: {message}\n\n"
-                "Tenta reformular ou pergunta sobre a microquinta.")
-
-    def _poultry_response(self, message, msg, ctx):
-        if any(w in msg for w in ["doenca", "doente", "problema", "machuc", "ferid", "morreu", "mort"]):
-            return (f"DIAGNOSTICO DE SAUDE\n\n{ctx}\n\n"
-                    "RECOMENDACOES:\n"
-                    "- Monitorizar comportamento diariamente\n"
-                    "- Verificar penas, olhos, mobilidade\n"
-                    "- Manter agua limpa sempre disponivel\n"
-                    "- Ventilacao adequada\n\n"
-                    f"Pergunta: {message}")
-
-        if any(w in msg for w in ["dinheiro", "ganho", "lucro", "receita", "custo", "preco", "vend"]):
-            return (f"FINANCAS\n\n{ctx}\n\n"
-                    "RECEITA: ~62.50EUR/mes\n"
-                    "CUSTOS: ~110-145EUR/mes\n"
-                    "SALDO: -50 a -80EUR/mes (hobby)\n\n"
-                    f"Pergunta: {message}")
-
-        if any(w in msg for w in ["incubar", "incubacao", "eclosao", "chocadeira", "nasc"]):
-            return (f"INCUBACAO\n\n{ctx}\n\n"
-                    "7 ovos no incubador (2 Araucana + 5 RIR)\n"
-                    "Iniciada: 13 Junho | Eclosao: 4 Julho\n\n"
-                    f"Pergunta: {message}")
-
-        if any(w in msg for w in ["ovo", "ovos", "bota", "postura", "botam"]):
-            return (f"PRODUCAO DE OVOS\n\n{ctx}\n\n"
-                    "RIR: 6/dia | JG: 3/dia | Araucana: 1/dia (irregular)\n"
-                    "Total: ~10 ovos/dia\n"
-                    "Preco: 2.50EUR/doz (normais) | 6.00EUR/doz (azuis)\n\n"
-                    f"Pergunta: {message}")
-
-        if any(w in msg for w in ["racao", "comida", "alimentacao", "comer", "agua"]):
-            return (f"ALIMENTACAO\n\n{ctx}\n\n"
-                    "- Racao poedeiras\n"
-                    "- Agua limpa sempre disponivel\n"
-                    "- Calcio para casca\n"
-                    "- Trato: milho, restos\n\n"
-                    f"Pergunta: {message}")
-
-        if any(w in msg for w in ["galinha", "galinhas", "ave", "aves", "pinto", "pintos", "galo", "macho"]):
-            return (f"PLANTEL\n\n{ctx}\n\n"
-                    "Baia 1 (RIR): 1M + 7F\n"
-                    "Baia 2 (JG): 1M + 3F + 12 pintos\n"
-                    "Baia 3 (Araucana): 1M Bigodao + 1F Pompom\n\n"
-                    f"Pergunta: {message}")
-
-        if any(w in msg for w in ["baia", "baias", "local", "espaco"]):
-            return (f"BAIAS\n\n{ctx}\n\n"
-                    "Baia 1: 20m2 | Baia 2: N/D | Baia 3: 4m2\n\n"
-                    f"Pergunta: {message}")
-
-        return self._web_search(message)
-
-    def _app_response(self, message, msg):
-        if any(w in msg for w in ["python", "flask", "fastapi", "django"]):
-            return (f"PROGRAMACAO - Python\n\n"
-                    "Stack recomendada:\n"
-                    "- Backend: Flask (simples) ou FastAPI (moderno)\n"
-                    "- Database: SQLite (local) ou PostgreSQL (cloud)\n"
-                    "- Deploy: Railway (gratis) ou Render\n"
-                    "- ORM: SQLAlchemy\n\n"
-                    "Exemplo Flask:\n"
-                    "@app.route('/api/chat', methods=['POST'])\n"
-                    "def chat():\n"
-                    "    data = request.json\n"
-                    "    return jsonify({'response': 'ola'})\n\n"
-                    f"Pergunta: {message}")
-
-        if any(w in msg for w in ["android", "ios", "mobile", "app"]):
-            return (f"PROGRAMACAO - App Mobile\n\n"
-                    "Opcoes:\n"
-                    "- React Native (JavaScript, 1 codebase iOS+Android)\n"
-                    "- Flutter (Dart, performante)\n"
-                    "- PWA (HTML/CSS/JS, mais simples)\n\n"
-                    "Para o ORION: PWA ja esta funcional!\n"
-                    "Acesso: orion-general-production.up.railway.app\n\n"
-                    f"Pergunta: {message}")
-
-        if any(w in msg for w in ["website", "html", "css", "frontend"]):
-            return (f"PROGRAMACAO - Website\n\n"
-                    "Stack:\n"
-                    "- HTML5 + CSS3 + JavaScript\n"
-                    "- Framework: Bootstrap, Tailwind\n"
-                    "- Hosting: GitHub Pages (gratis)\n\n"
-                    f"Pergunta: {message}")
-
-        if any(w in msg for w in ["api", "backend", "servidor", "server"]):
-            return (f"PROGRAMACAO - API/Backend\n\n"
-                    "Python:\n"
-                    "- Flask: flask.palletsprojects.com\n"
-                    "- FastAPI: fastapi.tiangolo.com\n\n"
-                    "Endpoints ORION:\n"
-                    "- POST /api/chat - Enviar mensagem\n"
-                    "- GET /api/health - Status\n\n"
-                    f"Pergunta: {message}")
-
-        if any(w in msg for w in ["database", "base de dados", "sql"]):
-            return (f"PROGRAMACAO - Database\n\n"
-                    "Opcoes:\n"
-                    "- SQLite (ficheiro local, sem setup)\n"
-                    "- PostgreSQL (cloud, gratis no Supabase)\n"
-                    "- MongoDB (NoSQL, flexivel)\n\n"
-                    f"Pergunta: {message}")
-
-        if any(w in msg for w in ["deploy", "cloud", "railway", "github"]):
-            return (f"PROGRAMACAO - Deploy\n\n"
-                    "Plataformas gratis:\n"
-                    "- Railway: python/or Node.js\n"
-                    "- Render: static sites + APIs\n"
-                    "- GitHub Pages: sites estaticos\n"
-                    "- Vercel: Next.js + serverless\n\n"
-                    "ORION esta no Railway!\n\n"
-                    f"Pergunta: {message}")
-
-        return self._web_search(message)
-
-    def send_json(self, data):
-        response = json.dumps(data, ensure_ascii=False).encode()
-        self.send_response(200)
-        self.send_header('Content-Type', 'application/json')
-        self.send_header('Content-Length', len(response))
-        self.send_header('Access-Control-Allow-Origin', '*')
-        self.end_headers()
-        self.wfile.write(response)
-
-    def do_OPTIONS(self):
-        self.send_response(200)
-        self.send_header('Access-Control-Allow-Origin', '*')
-        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
-        self.end_headers()
-
-
-def main():
-    print(f"ORION Cloud Server - Port {PORT}")
-    server = ThreadingHTTPServer(('0.0.0.0', PORT), ORIONHandler)
-    print("Server running!")
-    server.serve_forever()
+    def main():
+        print(f"ORION Cloud Server v6.0 - Port {PORT}")
+        print(f"Web UI: {WEB_ROOT}")
+        print(f"orion/ package: {'IMPORTED' if ORION_IMPORTED else 'NOT AVAILABLE'}")
+        server = ThreadingHTTPServer(("0.0.0.0", PORT), ORIONHandler)
+        print("Server running!")
+        server.serve_forever()
 
 
 if __name__ == "__main__":

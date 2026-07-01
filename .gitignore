@@ -1,5 +1,7 @@
-# Ignore generated ORION memory files
-ORION_SYSTEM/
+# Ignore generated ORION memory files (except web_ui)
+ORION_SYSTEM/*
+!ORION_SYSTEM/web_ui/
+!ORION_SYSTEM/web_ui/**
 
 # Python cache
 __pycache__/
