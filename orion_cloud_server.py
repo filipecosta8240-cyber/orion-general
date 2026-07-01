@@ -273,24 +273,11 @@ class ORIONHandler(BaseHTTPRequestHandler):
 
     def call_general(self, message):
         try:
-            import subprocess
-            safe_msg = message.replace('"', "'")
-            script = f'''
-import sys
-sys.path.insert(0, r"{PROJECT_ROOT}")
-from orion.agents import get_general
-general = get_general()
-print(general.think("{safe_msg}"))
-'''
-            result = subprocess.run(
-                [sys.executable, "-c", script],
-                capture_output=True, text=True, timeout=60,
-                cwd=str(PROJECT_ROOT),
-                env={**os.environ, 'PYTHONIOENCODING': 'utf-8'}
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                return result.stdout.strip()
-            return self._fallback_response(message)
+            sys.path.insert(0, str(PROJECT_ROOT))
+            from orion.agents import get_general
+            general = get_general()
+            result = general.think(message)
+            return result
         except Exception as e:
             return self._fallback_response(message)
 
