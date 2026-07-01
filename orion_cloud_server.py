@@ -44,9 +44,12 @@ PORT = int(os.environ.get("PORT", 8080))
 PROJECT_ROOT = Path(__file__).resolve().parent
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 
-# --- Rate limiting ---
+# --- Rate limiting & Caching ---
 _last_ai_call = 0
 _ai_call_lock = __import__("threading").Lock()
+_ai_cache = {}
+_ai_cache_max = 50
+_WIKI_CACHE = {}
 
 # --- Tenta importar do pacote orion/ ---
 try:
@@ -163,15 +166,22 @@ class OrionBrain:
             print(f"[ORION] GitHub sync error: {e}")
 
     def call_ai(self, prompt: str, system_prompt: str = "") -> Optional[str]:
-        global _last_ai_call
+        global _last_ai_call, _ai_cache
+        cache_key = f"{system_prompt}:{prompt}"[:200]
+
+        # Check cache first
+        if cache_key in _ai_cache:
+            cached = _ai_cache[cache_key]
+            if time.time() - cached["time"] < 300:  # 5 min cache
+                return cached["response"]
+
         with _ai_call_lock:
             elapsed = time.time() - _last_ai_call
-            wait = max(0, 3 - elapsed)
+            wait = max(0, 8 - elapsed)  # 8s min between AI calls
             if wait > 0:
                 time.sleep(wait)
             _last_ai_call = time.time()
 
-        # Prompt simples e direto (compativel com Pollinations)
         if system_prompt:
             full_prompt = f"{system_prompt}\nPergunta: {prompt}\nResposta:"
         else:
@@ -179,68 +189,144 @@ class OrionBrain:
         full_prompt = full_prompt[:2000]
 
         # 1. Pollinations AI (gratis, sem API key)
-        for attempt in range(3):
+        for attempt in range(2):
             try:
-                prompt_encoded = urllib.parse.quote(full_prompt[:2000].encode("utf-8"))
+                prompt_encoded = urllib.parse.quote(full_prompt.encode("utf-8"))
                 url = "https://text.pollinations.ai/" + prompt_encoded
                 req = urllib.request.Request(url, headers={"User-Agent": "ORION/6.0"})
-                with urllib.request.urlopen(req, timeout=25, context=SSL_CTX) as resp:
+                with urllib.request.urlopen(req, timeout=20, context=SSL_CTX) as resp:
                     text = resp.read().decode("utf-8").strip()
                     if text and len(text) > 5 and "429" not in text:
+                        # Cache it
+                        _ai_cache[cache_key] = {"response": text, "time": time.time()}
+                        if len(_ai_cache) > _ai_cache_max:
+                            oldest = min(_ai_cache.keys(), key=lambda k: _ai_cache[k]["time"])
+                            _ai_cache.pop(oldest, None)
                         return text
             except Exception as e:
                 print(f"[ORION] Pollinations attempt {attempt+1}: {e}")
-                time.sleep(2)
+                time.sleep(3)
 
-        # 2. Fallback: HuggingFace inference
+        # 2. Fallback: HuggingFace Mistral 7B (gratis, sem API key)
         try:
-            hf_prompt = prompt[:500]
-            hf_data = json.dumps({"inputs": hf_prompt}).encode()
+            hf_payload = json.dumps({
+                "inputs": f"<s>[INST] {full_prompt[:800]} [/INST]",
+                "parameters": {"max_new_tokens": 300, "temperature": 0.7}
+            }).encode()
             req = urllib.request.Request(
-                "https://api-inference.huggingface.co/models/microsoft/DialoGPT-medium",
-                data=hf_data,
+                "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2",
+                data=hf_payload,
                 headers={"Content-Type": "application/json", "User-Agent": "ORION/6.0"},
             )
-            with urllib.request.urlopen(req, timeout=20, context=SSL_CTX) as resp:
+            with urllib.request.urlopen(req, timeout=25, context=SSL_CTX) as resp:
                 result = json.loads(resp.read().decode())
                 if isinstance(result, list) and len(result) > 0:
                     text = result[0].get("generated_text", "")
-                    if text and text != hf_prompt:
+                    if text and len(text) > 20:
+                        # Extract response after [/INST]
+                        if "[/INST]" in text:
+                            text = text.split("[/INST]")[-1].strip()
+                        _ai_cache[cache_key] = {"response": text, "time": time.time()}
                         return text
         except Exception as e:
             print(f"[ORION] HuggingFace fallback: {e}")
 
         return None
 
-    def web_search(self, query: str) -> Optional[str]:
+    def wikipedia_search(self, query: str) -> Optional[str]:
+        global _WIKI_CACHE
+        if query in _WIKI_CACHE:
+            return _WIKI_CACHE[query]
+        try:
+            url = f"https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch={urllib.parse.quote(query)}&format=json&srlimit=3"
+            req = urllib.request.Request(url, headers={"User-Agent": "ORION/6.0"})
+            with urllib.request.urlopen(req, timeout=10, context=SSL_CTX) as resp:
+                data = json.loads(resp.read().decode())
+            results = data.get("query", {}).get("search", [])
+            if results:
+                parts = [f"**Wikipedia:** {r['title']}"]
+                for r in results:
+                    page_url = f"https://en.wikipedia.org/w/api.php?action=query&prop=extracts&exintro&explaintext&titles={urllib.parse.quote(r['title'])}&format=json"
+                    req2 = urllib.request.Request(page_url, headers={"User-Agent": "ORION/6.0"})
+                    with urllib.request.urlopen(req2, timeout=10, context=SSL_CTX) as resp2:
+                        page_data = json.loads(resp2.read().decode())
+                    pages = page_data.get("query", {}).get("pages", {})
+                    for _, page in pages.items():
+                        extract = page.get("extract", "")
+                        if extract:
+                            parts.append(extract[:1000])
+                            break
+                result = "\n\n".join(parts)
+                _WIKI_CACHE[query] = result
+                return result
+        except Exception as e:
+            print(f"[ORION] Wikipedia error: {e}")
+        return None
+
+    def web_search(self, query: str, max_results: int = 6, fetch_pages: bool = True) -> Optional[str]:
         if self.scraper:
             try:
-                results = self.scraper.search(query, max_results=5)
+                results = self.scraper.search(query, max_results=max_results)
                 if results:
                     lines = []
-                    for r in results:
-                        lines.append(f"**{r.title}**")
-                        lines.append(f"Fonte: {r.source}")
-                        lines.append(f"{r.snippet}")
+                    for i, r in enumerate(results, 1):
+                        lines.append(f"**{i}. {r.title}**")
+                        lines.append(f"   URL: {r.url}")
+                        lines.append(f"   Fonte: {r.source}")
+                        if r.snippet:
+                            lines.append(f"   {r.snippet}")
                         lines.append("")
+                    # Fetch full content from top results
+                    if fetch_pages and results:
+                        for r in results[:2]:
+                            try:
+                                page = self.scraper.fetch_page(r.url, max_chars=3000)
+                                if page and page.word_count > 50:
+                                    lines.append(f"--- Conteudo de: {r.title} ---")
+                                    lines.append(page.content[:2000])
+                                    lines.append("")
+                            except Exception:
+                                pass
                     return "\n".join(lines)
             except Exception as e:
                 print(f"[ORION] Web search error: {e}")
-
-        # Fallback: Wikipedia
-        try:
-            url = "https://en.wikipedia.org/api/rest_v1/page/summary/" + urllib.parse.quote(query)
-            req = urllib.request.Request(url, headers={"User-Agent": "ORION/6.0"})
-            with urllib.request.urlopen(req, timeout=8, context=SSL_CTX) as resp:
-                data = json.loads(resp.read().decode())
-            title = data.get("title", query)
-            extract = data.get("extract", "")
-            if extract:
-                return f"**{title}**\n\n{extract[:2000]}"
-        except Exception:
-            pass
-
         return None
+
+    def fetch_url(self, url: str) -> Optional[str]:
+        """Faz fetch do conteudo de qualquer URL"""
+        if self.scraper:
+            try:
+                page = self.scraper.fetch_page(url, max_chars=10000)
+                if page:
+                    return f"**Titulo:** {page.title}\n**URL:** {url}\n**Palavras:** {page.word_count}\n\n{page.content}"
+            except Exception as e:
+                print(f"[ORION] Fetch error: {e}")
+        return None
+
+    def _requires_web_search(self, message: str) -> bool:
+        """Decide se a mensagem precisa de pesquisa web com base no conteudo."""
+        msg = message.lower().strip()
+
+        # Se o usuario pediu expressamente pesquisa
+        if any(m in message for m in ("[PESQUISAR]", "[DEEP DIVE]", "[ANALISAR]", "[FETCH]")):
+            return True
+
+        # Palavras-chave que indicam necessidade de informacao atual
+        need_search_keywords = [
+            "noticias", "ultimas", "atual", "hoje", "2025", "2026", "2027",
+            "cotacao", "cotação", "quanto custa",
+            "ganhou", "venceu", "campeao", "campeão", "resultado",
+            "eleicao", "eleição", "presidente", "governo",
+            "previsao", "previsão", "temperatura",
+            "lancamento", "lançamento",
+            "bitcoin", "ethereum", "dolar", "dólar", "euro",
+            "como funciona", "tutorial", "guia",
+            "morreu", "faleceu", "morte",
+            "guerra", "conflito",
+            "estatisticas", "estatísticas", "dados", "numeros", "números",
+            "ranking", "top", "melhor", "pior", "recorde",
+        ]
+        return any(kw in msg for kw in need_search_keywords)
 
     def think(self, message: str) -> str:
         msg_lower = message.lower().strip()
@@ -261,28 +347,91 @@ class OrionBrain:
             return self._mode_summary(message)
         if "[PESQUISAR]" in message:
             return self._mode_web_research(message)
+        if "[FETCH]" in message:
+            return self._mode_fetch_url(message)
         if "[MEMORIA]" in message:
             return self._mode_memory(message)
+
+        # === DECISAO AUTONOMA DE PESQUISAR ===
+        # Se a query parece precisar de informacao atual, pesquisa primeiro
+        should_search = self._requires_web_search(message)
+        web_context = None
+        if should_search:
+            web_context = self.web_search(message, fetch_pages=True)
+            print(f"[ORION] Pesquisa autonoma ativada para: {message[:60]}...")
+
+        if web_context:
+            # Alimenta a IA com o contexto da web (concatenado para caber no limite)
+            system = ("ORION General v6.0 - Responde com base nos resultados da web abaixo. "
+                      "Citra as fontes. Responde em portugues de Portugal.")
+            context_summary = web_context[:1500]
+            prompt = f"Pergunta: {message}\n\nContexto web:\n{context_summary}"
+            ai_response = self.call_ai(prompt, system)
+            if ai_response and len(ai_response) > 15:
+                enriched = f"{ai_response}\n\n---\n🔍 *Pesquisa web autonoma*"
+                self.add_to_history("assistant", enriched)
+                self.save_to_github("assistant", enriched, "ai+web")
+                self._record_learning(message, enriched, "ai+web")
+                return enriched
+            # Se IA falhou com contexto, usa os resultados diretamente
+            result = f"**{message}**\n\n{web_context}"
+            self.add_to_history("assistant", result)
+            self.save_to_github("assistant", result, "web")
+            self._record_learning(message, result, "web")
+            return result
 
         # === Tenta AI real primeiro (como Claude) ===
         system = ("ORION General v6.0 - Assistente IA em portugues de Portugal. "
                   "Responde de forma natural, util e honesta. "
-                  "Usa markdown quando apropriado.")
+                  "Usa markdown quando apropriado. Se nao souberes algo, diz 'NAO SEI'.")
 
         ai_response = self.call_ai(message, system)
         if ai_response and len(ai_response) > 10:
+            # Detecta se a IA nao sabe a resposta -> pesquisa web automaticamente
+            unsure_patterns = [
+                "nao tenho acesso", "nao sei", "nao consigo", "nao posso",
+                "i don't have", "i'm sorry", "i cannot", "i don't know",
+                "not have access", "can't provide", "desculpa",
+                "não tenho acesso", "não sei", "não consigo", "não posso",
+            ]
+            is_unsure = any(p in ai_response.lower() for p in unsure_patterns)
+
+            if is_unsure:
+                web_results = self.web_search(message, fetch_pages=True)
+                if web_results:
+                    system2 = ("ORION General v6.0 - Responde com base nos resultados da web. Citra fontes.")
+                    prompt2 = f"Pergunta: {message}\n\nContexto:\n{web_results[:1500]}"
+                    enriched_ai = self.call_ai(prompt2, system2)
+                    if enriched_ai and len(enriched_ai) > 15:
+                        enriched = f"{enriched_ai}\n\n---\n🔍 *Pesquisa automatica*"
+                    else:
+                        enriched = f"**{message}**\n\n{web_results}"
+                    self.add_to_history("assistant", enriched)
+                    self.save_to_github("assistant", enriched, "web_enriched")
+                    self._record_learning(message, enriched, "web_enriched")
+                    return enriched
+
             self.add_to_history("assistant", ai_response)
             self.save_to_github("assistant", ai_response, "ai")
             self._record_learning(message, ai_response, "ai")
             return ai_response
 
-        # === Fallback: web search ===
-        web = self.web_search(message)
+        # === Se IA falhou, pesquisa web diretamente ===
+        web = self.web_search(message, fetch_pages=True)
         if web:
             result = f"**Pesquisa Web:** {message}\n\n{web}"
             self.add_to_history("assistant", result)
             self.save_to_github("assistant", result, "web")
             self._record_learning(message, result, "web")
+            return result
+
+        # === Fallback: Wikipedia ===
+        wiki = self.wikipedia_search(message)
+        if wiki:
+            result = f"**Wikipedia:** {message}\n\n{wiki}"
+            self.add_to_history("assistant", result)
+            self.save_to_github("assistant", result, "wiki")
+            self._record_learning(message, result, "wiki")
             return result
 
         # === Fallback final ===
@@ -361,12 +510,25 @@ class OrionBrain:
 
     def _mode_web_research(self, message: str) -> str:
         query = message.replace("[PESQUISAR]", "").strip()
-        web = self.web_search(query)
+        web = self.web_search(query, max_results=8, fetch_pages=True)
         if web:
             result = f"🔍 **PESQUISA WEB**\n\n**Tópico:** {query}\n\n{web}"
         else:
-            ai = self.call_ai(f"Pesquisa sobre: {query}", "ORION General v6 - Pesquisa web.")
-            result = f"🔍 **PESQUISA**\n\n**{query}**\n\n{ai or 'Sem resultados.'}"
+            ai = self.call_ai(f"Pesquisa sobre: {query}", "ORION General v6 - Pesquisa web com dados atualizados.")
+            result = f"🔍 **PESQUISA**\n\n**{query}**\n\n{ai or 'Sem resultados na web.'}"
+        self.add_to_history("assistant", result)
+        return result
+
+    def _mode_fetch_url(self, message: str) -> str:
+        url = message.replace("[FETCH]", "").strip()
+        if not url.startswith("http"):
+            result = "URL invalida. Usa: `[FETCH] https://exemplo.com`"
+        else:
+            content = self.fetch_url(url)
+            if content:
+                result = f"📄 **CONTEUDO FETCHED**\n\n{content}"
+            else:
+                result = f"Nao foi possivel aceder a: {url}"
         self.add_to_history("assistant", result)
         return result
 
@@ -553,8 +715,16 @@ if FASTAPI_AVAILABLE:
 
     @app.post("/api/web/search")
     async def web_search_endpoint(req: ChatRequest):
-        result = brain.web_search(req.message)
+        result = brain.web_search(req.message, fetch_pages=True)
         return {"query": req.message, "results": result or "Sem resultados"}
+
+    class FetchRequest(BaseModel):
+        url: str
+
+    @app.post("/api/web/fetch")
+    async def fetch_url_endpoint(req: FetchRequest):
+        result = brain.fetch_url(req.url)
+        return {"url": req.url, "content": result or "Nao foi possivel aceder"}
 
     @app.get("/api/conversation/history")
     async def conversation_history(limit: int = 20):
