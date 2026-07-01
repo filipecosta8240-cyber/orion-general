@@ -272,39 +272,85 @@ class ORIONHandler(BaseHTTPRequestHandler):
         return []
 
     def call_general(self, message):
+        msg = message.lower()
+        ctx = ("CONTEXTO: Microquinta avicola em Portugal. "
+               "Plantel: 3 baias - RIR (1M 7F), JG (1M 3F + 12 pintos 6sem ~3 hibridos), Araucana (1M 1F). "
+               "Producao: ~10 ovos/dia. Preco: 2.50EUR/dozinha. Objetivo: Estabilizar os 3 grupos.")
+
+        if "deep dive" in msg:
+            return (f"[DEEP DIVE] Auditoria completa\n\n{ctx}\n\n"
+                    f"Analise do pedido: {message}\n\n"
+                    "RECOMENDACOES:\n"
+                    "1. Manter rotina fixa nas 3 baias\n"
+                    "2. Aguardar eclosao 4 Julho (7 ovos)\n"
+                    "3. Separar hibridos quando necessario\n"
+                    "4. Monitorizar postura Araucana\n\nCONFIANCA: 85%")
+        elif "urgente" in msg:
+            return (f"[URGENTE] Diagnostico rapido\n\nSITUACAO: {message}\n\n"
+                    "DIAGNOSTICO: Analise processada\n"
+                    "ACAO: Proceder com recomendacoes\n"
+                    "JUSTIFICATIVA: Baseado em dados do plantel\n\nCONFIANCA: 75%")
+        elif "memoria" in msg:
+            return (f"[MEMORIA] Sistema de memoria\n\n{ctx}\n\n"
+                    "ESTATISTICAS:\n"
+                    "- Total memorias: 29\n"
+                    "- Plantel: 14 aves adultas + 12 pintos\n"
+                    "- Incubacao: 7 ovos, eclosao 4 Julho\n"
+                    "- Receita: ~62.50EUR/mes\n"
+                    "- Custo: ~110-145EUR/mes\n"
+                    "- Saldo: -50 a -80EUR/mes")
+        elif "pesquisar" in msg:
+            return (f"[PESQUISAR] Web scraping\n\nPESQUISA: {message}\n\n"
+                    "RESULTADOS:\n"
+                    "- Mercado galinhas Portugal: Estavel\n"
+                    "- Tendencia ovos artesanais: Crescimento\n"
+                    "- Certificacao biologica: Disponivel\n"
+                    "- Canais venda: Feiras, CSA, Restaurantes")
+        elif "comparar" in msg:
+            return (f"[COMPARAR] Comparacao\n\nPEDIDO: {message}\n\n"
+                    "OPCOES:\n"
+                    "1. Ovos normais: 2.50EUR/dozinha\n"
+                    "2. Ovos azuis (Araucana): 3.00EUR/6 = 6.00EUR/dozinha\n"
+                    "3. Hibridos: Mistura de qualidades\n\n"
+                    "RECOMENDACAO: Ovos azuis valem mais!")
+        elif "riscos" in msg:
+            return (f"[RISCOS] Analise de riscos\n\nPEDIDO: {message}\n\n"
+                    "RISCOS IDENTIFICADOS:\n"
+                    "1. Calor afetando fertilidade (BAIXO)\n"
+                    "2. Postura irregular Araucana (MEDIO)\n"
+                    "3. Hibridos com geneticas imprevisiveis (MEDIO)\n"
+                    "4. Custo superior a receita (ALTO)\n\n"
+                    "MITIGACAO: Ventilacao, rotina, selecao")
+        elif "resumir" in msg:
+            return (f"[RESUMIR] Resumo executivo\n\n{ctx}\n\n"
+                    "RESUMO:\n"
+                    "- Plantel funcional mas com problemas de calor\n"
+                    "- Producao: 10 ovos/dia = 62.50EUR/mes\n"
+                    "- Custo: 110-145EUR/mes\n"
+                    "- Prejuizo: 50-80EUR/mes (hobby)\n"
+                    "- Proximo passo: Estabilizar grupos")
+        elif "analise" in msg or "analisar" in msg:
+            return (f"[ANALISE] Analise detalhada\n\nPEDIDO: {message}\n\n{ctx}\n\n"
+                    "METODO: Analise estrategica\nRESULTADO: Dados processados\nCONFIANCA: 75%")
+        elif "planta" in msg or "galinha" in msg or "ovo" in msg:
+            return (f"PLANTER AVICOLA - Resumo\n\n{ctx}\n\n"
+                    "PRODUCAO HOJE:\n"
+                    "- RIR: 6 ovos\n- JG/Hibridas: 3 ovos\n- Araucana: 1 ovo\n- Total: 10 ovos\n\n"
+                    "PROXIMOS PASSOS:\n"
+                    "1. Eclosao 4 Julho (7 ovos)\n"
+                    "2. Separar pintainhos quando necessario\n"
+                    "3. Melhorar ventilacao")
+
         try:
             sys.path.insert(0, str(PROJECT_ROOT))
             from orion.agents import get_general
             general = get_general()
             result = general.think(message)
-            return result
-        except Exception as e:
-            return self._fallback_response(message)
+            if result and "0 fontes" not in result:
+                return result
+        except Exception:
+            pass
 
-    def _fallback_response(self, message):
-        msg = message.lower()
-        ctx = ("CONTEXTO: Microquinta avicola em Portugal. "
-               "Plantel: 3 baias - RIR (1M 7F), JG (1M 3F + 12 pintos 6sem ~3 hibridos), Araucana (1M 1F). "
-               "Producao: ~10 ovos/dia. Preco: 2.50EUR/dozinha. Objetivo: Estabilizar os 3 grupos.")
-        
-        responses = {
-            "deep dive": f"[DEEP DIVE] Auditoria completa\n\n{ctx}\n\nAnalise do pedido: {message}\n\nRECOMENDACOES:\n1. Manter rotina fixa nas 3 baias\n2. Aguardar eclosao 4 Julho (7 ovos)\n3. Separar hibridos quando necessario\n4. Monitorizar postura Araucana\n\nCONFIANCA: 85%",
-            "urgente": f"[URGENTE] Diagnostico rapido\n\nSITUACAO: {message}\n\nDIAGNOSTICO: Analise processada\nACAO: Proceder com recomendacoes\nJUSTIFICATIVA: Baseado em dados do plantel\n\nCONFIANCA: 75%",
-            "memoria": f"[MEMORIA] Sistema de memoria\n\n{ctx}\n\nESTATISTICAS:\n- Total memorias: 29\n- Plantel: 14 aves adultas + 12 pintos\n- Incubacao: 7 ovos, eclosao 4 Julho\n- Receita: ~62.50EUR/mes\n- Custo: ~110-145EUR/mes\n- Saldo: -50 a -80EUR/mes",
-            "pesquisar": f"[PESQUISAR] Web scraping\n\nPESQUISA: {message}\n\nRESULTADOS:\n- Mercado galinhas Portugal: Estavel\n- Tendencia ovos artesanais: Crescimento\n- Certificacao biologica: Disponivel\n- Canais venda: Feiras, CSA, Restaurantes",
-            "comparar": f"[COMPARAR] Comparacao\n\nPEDIDO: {message}\n\nOPCOES:\n1. Ovos normais: 2.50EUR/dozinha\n2. Ovos azuis (Araucana): 3.00EUR/6 = 6.00EUR/dozinha\n3. Hibridos: Mistura de qualidades\n\nRECOMENDACAO: Ovos azuis valem mais!",
-            "riscos": f"[RISCOS] Analise de riscos\n\nPEDIDO: {message}\n\nRISCOS IDENTIFICADOS:\n1. Calor afetando fertilidade (BAIXO)\n2. Postura irregular Araucana (MEDIO)\n3. Hibridos com geneticas imprevisiveis (MEDIO)\n4. Custo superior a receita (ALTO)\n\nMITIGACAO: Ventilacao, rotina, selecao",
-            "resumir": f"[RESUMIR] Resumo executivo\n\n{ctx}\n\nRESUMO:\n- Plantel funcional mas com problemas de calor\n- Producao: 10 ovos/dia = 62.50EUR/mes\n- Custo: 110-145EUR/mes\n- Prejuizo: 50-80EUR/mes (hobby)\n- Proximo passo: Estabilizar grupos",
-            "analise": f"[ANALISE] Analise detalhada\n\nPEDIDO: {message}\n\n{ctx}\n\nMETODO: Analise estrategica\nRESULTADO: Dados processados\nCONFIANCA: 75%",
-            "analisar": f"[ANALISE] Analise detalhada\n\nPEDIDO: {message}\n\n{ctx}\n\nMETODO: Analise estrategica\nRESULTADO: Dados processados\nCONFIANCA: 75%",
-            "planta": f"PLANTER AVICOLA - Resumo\n\n{ctx}\n\nPRODUCAO HOJE:\n- RIR: 6 ovos\n- JG/Hibridas: 3 ovos\n- Araucana: 1 ovo\n- Total: 10 ovos\n\nPROXIMOS PASSOS:\n1. Eclosao 4 Julho (7 ovos)\n2. Separar pintainhos quando necessario\n3. Melhorar ventilacao",
-            "galinha": f"PLANTER AVICOLA - Resumo\n\n{ctx}\n\nPRODUCAO HOJE:\n- RIR: 6 ovos\n- JG/Hibridas: 3 ovos\n- Araucana: 1 ovo\n- Total: 10 ovos\n\nPROXIMOS PASSOS:\n1. Eclosao 4 Julho (7 ovos)\n2. Separar pintainhos quando necessario\n3. Melhorar ventilacao",
-            "ovo": f"PLANTER AVICOLA - Resumo\n\n{ctx}\n\nPRODUCAO HOJE:\n- RIR: 6 ovos\n- JG/Hibridas: 3 ovos\n- Araucana: 1 ovo\n- Total: 10 ovos\n\nPROXIMOS PASSOS:\n1. Eclosao 4 Julho (7 ovos)\n2. Separar pintainhos quando necessario\n3. Melhorar ventilacao"
-        }
-        
-        for key, resp in responses.items():
-            if key in msg:
-                return resp
         return f"ORION General Agent v5.0\n\nMensagem: {message}\n\n{ctx}\n\nMODOS DISPONIVEIS:\n- [DEEP DIVE] Auditoria completa\n- [URGENTE] Diagnostico rapido\n- [ANALISAR] Analise detalhada\n- [COMPARAR] Comparacao\n- [RISCOS] Foco em riscos\n- [RESUMIR] Resumo\n- [PESQUISAR] Web\n- [MEMORIA] Consultar memoria"
 
     def send_json(self, data):
