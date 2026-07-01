@@ -54,6 +54,8 @@ try:
     from orion.web_scraper import WebScraper, get_web_scraper
     from orion.long_term_memory import LongTermMemory, get_long_term_memory, MemoryType
     from orion.memory import ObsidianMemoryBridge
+    from orion.autonomous_learning import AutonomousLearner, get_learner
+    from orion.self_evolution_engine import SelfEvolutionEngine, get_evolution_engine
     ORION_IMPORTED = True
 except ImportError as e:
     ORION_IMPORTED = False
@@ -70,6 +72,8 @@ class OrionBrain:
         self.scraper: Optional[WebScraper] = None
         self.ltm: Optional[LongTermMemory] = None
         self.memory: Optional[ObsidianMemoryBridge] = None
+        self.learner: Optional[AutonomousLearner] = None
+        self.evolution_engine: Optional[SelfEvolutionEngine] = None
         self.conversation_history: List[Dict] = []
         self.max_history = 50
 
@@ -79,6 +83,8 @@ class OrionBrain:
                 self.general = get_general(self.memory)
                 self.scraper = get_web_scraper()
                 self.ltm = get_long_term_memory()
+                self.learner = get_learner()
+                self.evolution_engine = get_evolution_engine()
                 print("[ORION] Brain inicializado com pacote orion/ completo")
             except Exception as e:
                 print(f"[ORION] Erro ao inicializar pacote orion/: {e}")
@@ -260,25 +266,15 @@ class OrionBrain:
 
         # === Tenta AI real primeiro (como Claude) ===
         system = ("ORION General v6.0 - Assistente IA em portugues de Portugal. "
-                  "Responde de forma natural, util e direta. Usa markdown quando apropriado. "
-                  "Contexto: Microquinta avicola com 3 baias de galinhas em Portugal.")
+                  "Responde de forma natural, util e honesta. "
+                  "Usa markdown quando apropriado.")
 
         ai_response = self.call_ai(message, system)
         if ai_response and len(ai_response) > 10:
             self.add_to_history("assistant", ai_response)
             self.save_to_github("assistant", ai_response, "ai")
+            self._record_learning(message, ai_response, "ai")
             return ai_response
-
-        # === Tenta General Agent para analise local ===
-        if self.general:
-            try:
-                result = self.general.think(message)
-                if result and len(result) > 30 and "RECOMENDA" in result:
-                    self.add_to_history("assistant", result)
-                    self.save_to_github("assistant", result, "general")
-                    return result
-            except Exception as e:
-                print(f"[ORION] General agent error: {e}")
 
         # === Fallback: web search ===
         web = self.web_search(message)
@@ -286,6 +282,7 @@ class OrionBrain:
             result = f"**Pesquisa Web:** {message}\n\n{web}"
             self.add_to_history("assistant", result)
             self.save_to_github("assistant", result, "web")
+            self._record_learning(message, result, "web")
             return result
 
         # === Fallback final ===
@@ -403,43 +400,76 @@ class OrionBrain:
         return result
 
     def _fallback_response(self, message: str) -> str:
-        ctx = ("Microquinta avicola em Portugal. "
-               "Plantel: 3 baias - RIR (1M 7F), JG (1M 3F + 12 pintos 6sem), Araucana (1M 1F). "
-               "Producao: ~10 ovos/dia. Preco: 2.50EUR/dozinha.")
-
-        if any(w in message.lower() for w in ["doenca", "doente", "problema", "machuc", "ferid"]):
-            return (f"**Diagnóstico de Saúde**\n\n{ctx}\n\n"
-                    "Recomendações:\n"
-                    "1. Monitorizar comportamento diariamente\n"
-                    "2. Verificar penas, olhos, mobilidade\n"
-                    "3. Manter agua limpa sempre disponivel\n"
-                    "4. Ventilacao adequada")
-
-        if any(w in message.lower() for w in ["ovo", "ovos", "bota", "postura"]):
-            return (f"**Produção de Ovos**\n\n{ctx}\n\n"
-                    "RIR: 6/dia | JG: 3/dia | Araucana: 1/dia (irregular)\n"
-                    "Total: ~10 ovos/dia\n"
-                    "Preco: 2.50EUR/doz (normais) | 6.00EUR/doz (azuis)")
-
-        if any(w in message.lower() for w in ["racao", "comida", "alimenta"]):
-            return (f"**Alimentação**\n\n{ctx}\n\n"
-                    "- Racao poedeiras\n"
-                    "- Agua limpa sempre disponivel\n"
-                    "- Calcio para casca\n"
-                    "- Trato: milho, restos")
-
-        if any(w in message.lower() for w in ["galinha", "galinhas", "pinto", "pintos"]):
-            return (f"**Plantel**\n\n{ctx}\n\n"
-                    "Baia 1 (RIR): 1M + 7F\n"
-                    "Baia 2 (JG): 1M + 3F + 12 pintos\n"
-                    "Baia 3 (Araucana): 1M Bigodao + 1F Pompom")
-
         return (f"Nao consegui processar: '{message}'\n\n"
-                "Tenta usar um modo especifico:\n"
-                "- [DEEP DIVE] para analise profunda\n"
+                "Sugestoes:\n"
                 "- [PESQUISAR] para pesquisa web\n"
                 "- [RESUMIR] para resumo\n"
+                "- [DEEP DIVE] para analise profunda\n"
                 "- Ou reformula a pergunta.")
+
+
+    def _record_learning(self, query: str, response: str, mode: str):
+        """Regista interacao no sistema de aprendizagem"""
+        if self.learner:
+            try:
+                self.learner.record_interaction(
+                    query=query,
+                    response=response,
+                    mode_used=mode,
+                    confidence=0.7,
+                    tags=[],
+                )
+            except Exception as e:
+                print(f"[ORION] Learning record error: {e}")
+
+        if self.evolution_engine:
+            try:
+                self.evolution_engine.record_metric("interaction", 1.0)
+            except Exception:
+                pass
+
+    def record_feedback(self, query: str, response: str, feedback: str):
+        """Regista feedback positivo/negativo para aprendizado"""
+        if self.learner:
+            try:
+                self.learner.record_feedback(query, feedback)
+                if feedback == "positive":
+                    self.learner.record_feedback(query, "positive")
+                if self.ltm:
+                    self.ltm.store(
+                        content=f"Feedback {feedback}: {query[:100]}",
+                        memory_type=MemoryType.LESSON if feedback == "negative" else MemoryType.INSIGHT,
+                        category="user_feedback",
+                        importance=0.7,
+                        source="user",
+                    )
+            except Exception as e:
+                print(f"[ORION] Feedback error: {e}")
+
+        if self.evolution_engine:
+            try:
+                self.evolution_engine.record_metric(
+                    "user_satisfaction",
+                    1.0 if feedback == "positive" else 0.0,
+                )
+            except Exception:
+                pass
+
+    def get_learning_stats(self) -> Dict:
+        """Retorna estatisticas de aprendizagem"""
+        stats = {}
+        if self.learner:
+            try:
+                stats["learning"] = self.learner.get_stats()
+                stats["summary"] = self.learner.get_learning_summary()
+            except Exception:
+                pass
+        if self.evolution_engine:
+            try:
+                stats["evolution"] = self.evolution_engine.get_stats()
+            except Exception:
+                pass
+        return stats or {"status": "learning not available"}
 
 
 # =====================================================
@@ -535,6 +565,30 @@ if FASTAPI_AVAILABLE:
     async def clear_conversation():
         brain.conversation_history = []
         return {"status": "cleared"}
+
+    class FeedbackRequest(BaseModel):
+        query: str = ""
+        response: str = ""
+        feedback: str  # "positive" or "negative"
+
+    @app.post("/api/feedback")
+    async def feedback(req: FeedbackRequest):
+        brain.record_feedback(req.query, req.response, req.feedback)
+        return {"status": "ok", "feedback": req.feedback}
+
+    @app.get("/api/learning/stats")
+    async def learning_stats():
+        return brain.get_learning_stats()
+
+    @app.get("/api/learning/patterns")
+    async def learning_patterns():
+        if brain.learner:
+            try:
+                patterns = brain.learner.get_recommendations("")
+                return {"patterns": patterns}
+            except Exception:
+                pass
+        return {"patterns": []}
 
     @app.get("/{full_path:path}")
     async def serve_frontend(full_path: str):

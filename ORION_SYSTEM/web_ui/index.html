@@ -179,6 +179,21 @@
         .welcome-message h2 { color: #4ade80; font-size: 1.2rem; margin-bottom: 6px; }
         .welcome-message p { color: #999; font-size: 0.85rem; }
 
+        .feedback-bar {
+            display: flex; gap: 6px; align-items: center;
+            margin-top: 8px; opacity: 0; transition: opacity 0.2s;
+        }
+        .message.bot:hover .feedback-bar { opacity: 1; }
+        .feedback-btn {
+            background: none; border: none; cursor: pointer;
+            font-size: 0.85rem; padding: 2px 6px; border-radius: 4px;
+            color: #666; transition: all 0.15s;
+        }
+        .feedback-btn:hover { background: rgba(255,255,255,0.1); }
+        .feedback-btn.liked { color: #4ade80; }
+        .feedback-btn.disliked { color: #f87171; }
+        .feedback-btn.sent { opacity: 0.5; cursor: default; }
+
         @media (max-width: 600px) {
             .message { max-width: 95%; font-size: 0.85rem; }
             .quick-actions button { font-size: 0.65rem; padding: 4px 9px; }
@@ -294,6 +309,9 @@
             if (badge) badge.remove();
         }
 
+        let lastQuery = "";
+        let lastResponse = "";
+
         async function checkConnection() {
             try {
                 const res = await fetch('/api/health');
@@ -310,6 +328,17 @@
             }
         }
 
+        async function sendFeedback(feedback) {
+            if (!lastQuery) return;
+            try {
+                await fetch('/api/feedback', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ query: lastQuery, response: lastResponse, feedback: feedback })
+                });
+            } catch(e) {}
+        }
+
         function addMessage(text, isUser = false) {
             const div = document.createElement('div');
             div.className = 'message ' + (isUser ? 'user' : 'bot');
@@ -320,10 +349,29 @@
                 div.querySelectorAll('pre code').forEach((block) => {
                     hljs.highlightElement(block);
                 });
+                const bar = document.createElement('div');
+                bar.className = 'feedback-bar';
+                bar.innerHTML = `
+                    <button class="feedback-btn" onclick="rate(this, 'positive')" title="Util">👍</button>
+                    <button class="feedback-btn" onclick="rate(this, 'negative')" title="Nao util">👎</button>
+                `;
+                div.appendChild(bar);
             }
             chat.appendChild(div);
             chat.scrollTop = chat.scrollHeight;
             return div;
+        }
+
+        function rate(btn, feedback) {
+            if (btn.classList.contains('sent')) return;
+            sendFeedback(feedback);
+            const bar = btn.parentElement;
+            bar.querySelectorAll('.feedback-btn').forEach(b => {
+                b.classList.remove('liked', 'disliked');
+                b.classList.add('sent');
+            });
+            if (feedback === 'positive') btn.classList.add('liked');
+            else btn.classList.add('disliked');
         }
 
         function addTyping() {
@@ -356,6 +404,7 @@
                 removeFile();
             }
 
+            lastQuery = text;
             addMessage(text, true);
             input.value = '';
             isProcessing = true;
@@ -370,7 +419,8 @@
                 });
                 const data = await res.json();
                 removeTyping();
-                addMessage(data.response || '*Sem resposta*');
+                lastResponse = data.response || '';
+                addMessage(lastResponse || '*Sem resposta*');
             } catch(e) {
                 removeTyping();
                 addMessage('**Erro de conexao** — Verifica se o servidor esta online.');
