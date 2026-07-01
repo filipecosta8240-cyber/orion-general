@@ -318,6 +318,14 @@ class ORIONHandler(BaseHTTPRequestHandler):
                    "baia", "baias", "racao", "alimentacao", "postura", "botar",
                    "dinheiro", "ganho", "lucro", "receita", "custo", "preco", "vend"]
 
+        APP = ["app", "programacao", "codigo", "code", "coding", "desenvolver", "desenvolvimento",
+               "software", "android", "ios", "mobile", "website", "api", "backend", "frontend",
+               "python", "javascript", "html", "css", "flask", "react", "database", "base de dados",
+               "deploy", "servidor", "server", "cloud", "github", "git", "railway", "vercel"]
+
+        if any(w in msg for w in APP):
+            return self._app_response(message, msg)
+
         if any(w in msg for w in POULTRY):
             try:
                 sys.path.insert(0, str(PROJECT_ROOT))
@@ -413,6 +421,69 @@ class ORIONHandler(BaseHTTPRequestHandler):
         if any(w in msg for w in ["baia", "baias", "local", "espaco"]):
             return (f"BAIAS\n\n{ctx}\n\n"
                     "Baia 1: 20m2 | Baia 2: N/D | Baia 3: 4m2\n\n"
+                    f"Pergunta: {message}")
+
+        return self._web_search(message)
+
+    def _app_response(self, message, msg):
+        if any(w in msg for w in ["python", "flask", "fastapi", "django"]):
+            return (f"PROGRAMACAO - Python\n\n"
+                    "Stack recomendada:\n"
+                    "- Backend: Flask (simples) ou FastAPI (moderno)\n"
+                    "- Database: SQLite (local) ou PostgreSQL (cloud)\n"
+                    "- Deploy: Railway (gratis) ou Render\n"
+                    "- ORM: SQLAlchemy\n\n"
+                    "Exemplo Flask:\n"
+                    "@app.route('/api/chat', methods=['POST'])\n"
+                    "def chat():\n"
+                    "    data = request.json\n"
+                    "    return jsonify({'response': 'ola'})\n\n"
+                    f"Pergunta: {message}")
+
+        if any(w in msg for w in ["android", "ios", "mobile", "app"]):
+            return (f"PROGRAMACAO - App Mobile\n\n"
+                    "Opcoes:\n"
+                    "- React Native (JavaScript, 1 codebase iOS+Android)\n"
+                    "- Flutter (Dart, performante)\n"
+                    "- PWA (HTML/CSS/JS, mais simples)\n\n"
+                    "Para o ORION: PWA ja esta funcional!\n"
+                    "Acesso: orion-general-production.up.railway.app\n\n"
+                    f"Pergunta: {message}")
+
+        if any(w in msg for w in ["website", "html", "css", "frontend"]):
+            return (f"PROGRAMACAO - Website\n\n"
+                    "Stack:\n"
+                    "- HTML5 + CSS3 + JavaScript\n"
+                    "- Framework: Bootstrap, Tailwind\n"
+                    "- Hosting: GitHub Pages (gratis)\n\n"
+                    f"Pergunta: {message}")
+
+        if any(w in msg for w in ["api", "backend", "servidor", "server"]):
+            return (f"PROGRAMACAO - API/Backend\n\n"
+                    "Python:\n"
+                    "- Flask: flask.palletsprojects.com\n"
+                    "- FastAPI: fastapi.tiangolo.com\n\n"
+                    "Endpoints ORION:\n"
+                    "- POST /api/chat - Enviar mensagem\n"
+                    "- GET /api/health - Status\n\n"
+                    f"Pergunta: {message}")
+
+        if any(w in msg for w in ["database", "base de dados", "sql"]):
+            return (f"PROGRAMACAO - Database\n\n"
+                    "Opcoes:\n"
+                    "- SQLite (ficheiro local, sem setup)\n"
+                    "- PostgreSQL (cloud, gratis no Supabase)\n"
+                    "- MongoDB (NoSQL, flexivel)\n\n"
+                    f"Pergunta: {message}")
+
+        if any(w in msg for w in ["deploy", "cloud", "railway", "github"]):
+            return (f"PROGRAMACAO - Deploy\n\n"
+                    "Plataformas gratis:\n"
+                    "- Railway: python/or Node.js\n"
+                    "- Render: static sites + APIs\n"
+                    "- GitHub Pages: sites estaticos\n"
+                    "- Vercel: Next.js + serverless\n\n"
+                    "ORION esta no Railway!\n\n"
                     f"Pergunta: {message}")
 
         return self._web_search(message)
